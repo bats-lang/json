@@ -1,0 +1,4 @@
+[package]
+name = "json"
+kind = "lib"
+unsafe = false
