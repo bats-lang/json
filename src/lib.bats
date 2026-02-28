@@ -71,13 +71,11 @@ fn bput {sn:nat} (b: !$B.builder, s: string sn): void = let
   fun loop {sn2:nat}{fuel:nat} .<fuel>.
     (b: !$B.builder, s: string sn2, slen: int sn2, i: int, fuel: int fuel): void =
     if fuel <= 0 then ()
-    else let val ii = g1ofg0(i) in
-      if ii >= 0 then
-        if $AR.lt1_int_int(ii, slen) then let
-          val c = char2int0(string_get_at(s, ii))
-          val () = $B.put_byte(b, c)
-        in loop(b, s, slen, i + 1, fuel - 1) end
-        else ()
+    else let val ii = $AR.checked_idx(i, slen) in
+      if ii >= 0 then let
+        val c = char2int0(string_get_at(s, ii))
+        val () = $B.put_byte(b, c)
+      in loop(b, s, slen, i + 1, fuel - 1) end
       else ()
     end
   val slen = g1u2i(string1_length(s))
@@ -89,39 +87,36 @@ fun emit_escaped {l:agz}{fuel:nat} .<fuel>.
   if fuel <= 0 then ()
   else if len <= 0 then ()
   else let
-    val i = g1ofg0(0)
     fun loop {l2:agz}{fuel2:nat} .<fuel2>.
       (b: !$B.builder, arr: !$A.arr(byte, l2, 4096), pos: int, len: int,
        fuel2: int fuel2): void =
       if fuel2 <= 0 then ()
       else if pos >= len then ()
       else let
-        val pi = g1ofg0(pos)
+        val pi = $AR.checked_idx(pos, 4096)
       in
-        if pi >= 0 then
-          if pi < 4096 then let
-            val c = byte2int0($A.get<byte>(arr, pi))
-          in
-            if $AR.eq_int_int(c, 34) then let (* " *)
-              val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 34)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-            else if $AR.eq_int_int(c, 92) then let (* \ *)
-              val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 92)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-            else if $AR.eq_int_int(c, 10) then let (* \n *)
-              val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 110)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-            else if $AR.eq_int_int(c, 9) then let (* \t *)
-              val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 116)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-            else if $AR.eq_int_int(c, 13) then let (* \r *)
-              val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 114)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-            else let
-              val () = $B.put_byte(b, c)
-            in loop(b, arr, pos + 1, len, fuel2 - 1) end
-          end
-          else ()
+        if pi >= 0 then let
+          val c = byte2int0($A.get<byte>(arr, pi))
+        in
+          if $AR.eq_int_int(c, 34) then let (* " *)
+            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 34)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+          else if $AR.eq_int_int(c, 92) then let (* \ *)
+            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 92)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+          else if $AR.eq_int_int(c, 10) then let (* \n *)
+            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 110)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+          else if $AR.eq_int_int(c, 9) then let (* \t *)
+            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 116)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+          else if $AR.eq_int_int(c, 13) then let (* \r *)
+            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 114)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+          else let
+            val () = $B.put_byte(b, c)
+          in loop(b, arr, pos + 1, len, fuel2 - 1) end
+        end
         else ()
       end
   in loop(b, arr, 0, len, $AR.checked_nat(len + 1)) end
@@ -193,8 +188,8 @@ implement serialize_entries(ents, b, first) =
 (* Helper: read a byte from a borrow *)
 fn rd {l:agz}{n:pos}
   (src: !$A.borrow(byte, l, n), pos: int, max: int n): int =
-  let val p = g1ofg0(pos) in
-    if p >= 0 then if p < max then byte2int0($A.read<byte>(src, p)) else 0
+  let val p = $AR.checked_idx(pos, max) in
+    if p >= 0 then byte2int0($A.read<byte>(src, p))
     else 0
   end
 
@@ -229,14 +224,14 @@ fun parse_string {l:agz}{n:pos}{fuel:nat} .<fuel>.
                     else if $AR.eq_int_int(c2, 34) then 34    (* \" *)
                     else if $AR.eq_int_int(c2, 92) then 92    (* \\ *)
                     else c2): int
-          val oi = g1ofg0(opos)
-          val () = (if oi >= 0 then if oi < 4096 then
-            $A.set<byte>(out, oi, int2byte0(ec)) else () else ())
+          val oi = $AR.checked_idx(opos, 4096)
+          val () = (if oi >= 0 then
+            $A.set<byte>(out, oi, int2byte0(ec)) else ())
         in loop(src, pos + 2, max, out, opos + 1, fuel2 - 1) end
         else let
-          val oi = g1ofg0(opos)
-          val () = (if oi >= 0 then if oi < 4096 then
-            $A.set<byte>(out, oi, int2byte0(c)) else () else ())
+          val oi = $AR.checked_idx(opos, 4096)
+          val () = (if oi >= 0 then
+            $A.set<byte>(out, oi, int2byte0(c)) else ())
         in loop(src, pos + 1, max, out, opos + 1, fuel2 - 1) end
       end
     val @(olen, epos) = loop(src, pos, max, out, 0, fuel)
