@@ -2,3 +2,9 @@
 name = "json"
 kind = "lib"
 unsafe = false
+
+[dependencies]
+"arith" = ""
+"array" = ""
+"builder" = ""
+"result" = ""
