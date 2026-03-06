@@ -67,28 +67,28 @@ implement json_entries_free(ents) =
    ============================================================ *)
 
 (* Helper: copy bytes from array to builder *)
-fn bput {sn:nat} (b: !$B.builder, s: string sn): void = let
-  fun loop {sn2:nat}{fuel:nat} .<fuel>.
-    (b: !$B.builder, s: string sn2, slen: int sn2, i: int, fuel: int fuel): void =
+fn bput {sn:nat} (b: !$B.builder_v >> $B.builder_v, s: string sn): void = let
+  fun loop {sn2:pos}{fuel:nat} .<fuel>.
+    (b: !$B.builder_v >> $B.builder_v, s: string sn2, slen: int sn2, i: int, fuel: int fuel): void =
     if fuel <= 0 then ()
     else let val ii = $AR.checked_idx(i, slen) in
       if ii >= 0 then let
         val c = char2int0(string_get_at(s, ii))
-        val () = $B.put_byte(b, c)
+        val () = $B.put_char(b, c)
       in loop(b, s, slen, i + 1, fuel - 1) end
       else ()
     end
   val slen = g1u2i(string1_length(s))
-in loop(b, s, slen, 0, $AR.checked_nat(g0ofg1(slen) + 1)) end
+in if slen > 0 then loop(b, s, slen, 0, slen + 1) else () end
 
 (* Helper: write a byte array to builder, escaping for JSON strings *)
 fun emit_escaped {l:agz}{fuel:nat} .<fuel>.
-  (b: !$B.builder, arr: !$A.arr(byte, l, 4096), len: int, fuel: int fuel): void =
+  (b: !$B.builder_v >> $B.builder_v, arr: !$A.arr(byte, l, 4096), len: int, fuel: int fuel): void =
   if fuel <= 0 then ()
   else if len <= 0 then ()
   else let
     fun loop {l2:agz}{fuel2:nat} .<fuel2>.
-      (b: !$B.builder, arr: !$A.arr(byte, l2, 4096), pos: int, len: int,
+      (b: !$B.builder_v >> $B.builder_v, arr: !$A.arr(byte, l2, 4096), pos: int, len: int,
        fuel2: int fuel2): void =
       if fuel2 <= 0 then ()
       else if pos >= len then ()
@@ -99,22 +99,22 @@ fun emit_escaped {l:agz}{fuel:nat} .<fuel>.
           val c = byte2int0($A.get<byte>(arr, pi))
         in
           if $AR.eq_int_int(c, 34) then let (* " *)
-            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 34)
+            val () = $B.put_char(b, 92) val () = $B.put_char(b, 34)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
           else if $AR.eq_int_int(c, 92) then let (* \ *)
-            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 92)
+            val () = $B.put_char(b, 92) val () = $B.put_char(b, 92)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
           else if $AR.eq_int_int(c, 10) then let (* \n *)
-            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 110)
+            val () = $B.put_char(b, 92) val () = $B.put_char(b, 110)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
           else if $AR.eq_int_int(c, 9) then let (* \t *)
-            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 116)
+            val () = $B.put_char(b, 92) val () = $B.put_char(b, 116)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
           else if $AR.eq_int_int(c, 13) then let (* \r *)
-            val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 114)
+            val () = $B.put_char(b, 92) val () = $B.put_char(b, 114)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
           else let
-            val () = $B.put_byte(b, c)
+            val () = $B.put_char(b, c)
           in loop(b, arr, pos + 1, len, fuel2 - 1) end
         end
         else ()
@@ -123,22 +123,22 @@ fun emit_escaped {l:agz}{fuel:nat} .<fuel>.
 
 (* Emit an integer as decimal digits *)
 fun emit_int {fuel:nat} .<fuel>.
-  (b: !$B.builder, n: int, fuel: int fuel): void =
+  (b: !$B.builder_v >> $B.builder_v, n: int, fuel: int fuel): void =
   if fuel <= 0 then ()
   else if n < 0 then let
-    val () = $B.put_byte(b, 45) (* - *)
+    val () = $B.put_char(b, 45) (* - *)
   in emit_int(b, ~n, fuel - 1) end
   else if n < 10 then
-    $B.put_byte(b, 48 + n)
+    $B.put_char(b, 48 + n)
   else let
     val () = emit_int(b, n / 10, fuel - 1)
-  in $B.put_byte(b, 48 + (n mod 10)) end
+  in $B.put_char(b, 48 + (n mod 10)) end
 
-#pub fun serialize(v: !json, b: !$B.builder): void
+#pub fun serialize(v: !json, b: !$B.builder_v >> $B.builder_v): void
 
-#pub fun serialize_list(lst: !json_list, b: !$B.builder, first: bool): void
+#pub fun serialize_list(lst: !json_list, b: !$B.builder_v >> $B.builder_v, first: bool): void
 
-#pub fun serialize_entries(ents: !json_entries, b: !$B.builder, first: bool): void
+#pub fun serialize_entries(ents: !json_entries, b: !$B.builder_v >> $B.builder_v, first: bool): void
 
 implement serialize(v, b) =
   case+ v of
@@ -146,26 +146,26 @@ implement serialize(v, b) =
   | json_bool(t) => (if t then bput(b, "true") else bput(b, "false"))
   | json_int(n) => emit_int(b, n, 20)
   | json_str(arr, len) => let
-      val () = $B.put_byte(b, 34) (* " *)
+      val () = $B.put_char(b, 34) (* " *)
       val () = emit_escaped(b, arr, len, $AR.checked_nat(len + 1))
-      val () = $B.put_byte(b, 34) (* " *)
+      val () = $B.put_char(b, 34) (* " *)
     in end
   | json_arr(lst) => let
-      val () = $B.put_byte(b, 91) (* [ *)
+      val () = $B.put_char(b, 91) (* [ *)
       val () = serialize_list(lst, b, true)
-      val () = $B.put_byte(b, 93) (* ] *)
+      val () = $B.put_char(b, 93) (* ] *)
     in end
   | json_obj(ents) => let
-      val () = $B.put_byte(b, 123) (* { *)
+      val () = $B.put_char(b, 123) (* { *)
       val () = serialize_entries(ents, b, true)
-      val () = $B.put_byte(b, 125) (* } *)
+      val () = $B.put_char(b, 125) (* } *)
     in end
 
 implement serialize_list(lst, b, first) =
   case+ lst of
   | json_list_nil() => ()
   | json_list_cons(v, rest) => let
-      val () = (if ~first then $B.put_byte(b, 44) else ()) (* , *)
+      val () = (if ~first then $B.put_char(b, 44) else ()) (* , *)
       val () = serialize(v, b)
     in serialize_list(rest, b, false) end
 
@@ -173,11 +173,11 @@ implement serialize_entries(ents, b, first) =
   case+ ents of
   | json_entries_nil() => ()
   | json_entries_cons(k, klen, v, rest) => let
-      val () = (if ~first then $B.put_byte(b, 44) else ()) (* , *)
-      val () = $B.put_byte(b, 34) (* " *)
+      val () = (if ~first then $B.put_char(b, 44) else ()) (* , *)
+      val () = $B.put_char(b, 34) (* " *)
       val () = emit_escaped(b, k, klen, $AR.checked_nat(klen + 1))
-      val () = $B.put_byte(b, 34) (* " *)
-      val () = $B.put_byte(b, 58) (* : *)
+      val () = $B.put_char(b, 34) (* " *)
+      val () = $B.put_char(b, 58) (* : *)
       val () = serialize(v, b)
     in serialize_entries(rest, b, false) end
 
@@ -254,9 +254,20 @@ fun parse_int {l:agz}{n:pos}{fuel:nat} .<fuel>.
   (src: !$A.borrow(byte, l, n), pos: int, max: int n
   ): $R.result(@(json, int), int)
 
+fn skip_comma {l:agz}{n:pos}
+  (src: !$A.borrow(byte, l, n), pos: int, max: int n, first: bool): int =
+  if first then pos
+  else let
+    val pc = skip_ws(src, pos, max, 256)
+    val cc = rd(src, pc, max)
+  in
+    if $AR.eq_int_int(cc, 44) then skip_ws(src, pc + 1, max, 256)
+    else pc
+  end
+
 fun parse_array {l:agz}{n:pos}{fuel:nat} .<fuel>.
   (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-   acc: json_list, fuel: int fuel): $R.result(@(json_list, int), int) =
+   acc: json_list, first: bool, fuel: int fuel): $R.result(@(json_list, int), int) =
   if fuel <= 0 then let
     val () = json_list_free(acc)
   in $R.err(pos) end
@@ -267,21 +278,12 @@ fun parse_array {l:agz}{n:pos}{fuel:nat} .<fuel>.
     if $AR.eq_int_int(c, 93) then (* ] *)
       $R.ok(@(acc, p + 1))
     else let
-      (* If not first element, expect comma *)
-      val p2 = (case+ acc of
-        | json_list_nil() => p
-        | json_list_cons(_, _) => let
-            val pc = skip_ws(src, p, max, 256)
-            val cc = rd(src, pc, max)
-          in
-            if $AR.eq_int_int(cc, 44) then skip_ws(src, pc + 1, max, 256) (* , *)
-            else pc
-          end): int
+      val p2 = skip_comma(src, p, max, first)
       val vr = parse(src, p2, max)
     in
       case+ vr of
       | ~$R.ok(@(v, ep)) =>
-          parse_array(src, ep, max, json_list_cons(v, acc), fuel - 1)
+          parse_array(src, ep, max, json_list_cons(v, acc), false, fuel - 1)
       | ~$R.err(e) => let
           val () = json_list_free(acc)
         in $R.err(e) end
@@ -290,7 +292,7 @@ fun parse_array {l:agz}{n:pos}{fuel:nat} .<fuel>.
 
 fun parse_object {l:agz}{n:pos}{fuel:nat} .<fuel>.
   (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-   acc: json_entries, fuel: int fuel): $R.result(@(json_entries, int), int) =
+   acc: json_entries, first: bool, fuel: int fuel): $R.result(@(json_entries, int), int) =
   if fuel <= 0 then let
     val () = json_entries_free(acc)
   in $R.err(pos) end
@@ -301,13 +303,7 @@ fun parse_object {l:agz}{n:pos}{fuel:nat} .<fuel>.
     if $AR.eq_int_int(c, 125) then (* } *)
       $R.ok(@(acc, p + 1))
     else let
-      val p2 = (case+ acc of
-        | json_entries_nil() => p
-        | json_entries_cons(_, _, _, _) => let
-            val pc = skip_ws(src, p, max, 256)
-            val cc = rd(src, pc, max)
-          in if $AR.eq_int_int(cc, 44) then skip_ws(src, pc + 1, max, 256) else pc end
-        end): int
+      val p2 = skip_comma(src, p, max, first)
       val ck = rd(src, p2, max)
     in
       if $AR.eq_int_int(ck, 34) then let (* " for key *)
@@ -322,7 +318,7 @@ fun parse_object {l:agz}{n:pos}{fuel:nat} .<fuel>.
           case+ vr of
           | ~$R.ok(@(v, vep)) =>
               parse_object(src, vep, max,
-                json_entries_cons(karr, klen, v, acc), fuel - 1)
+                json_entries_cons(karr, klen, v, acc), false, fuel - 1)
           | ~$R.err(e) => let
               val () = $A.free<byte>(karr)
               val () = json_entries_free(acc)
@@ -394,7 +390,7 @@ in
   in $R.ok(@(json_str(arr, len), ep)) end
   (* array *)
   else if $AR.eq_int_int(c, 91) then let (* [ *)
-    val lr = parse_array(src, p + 1, max, json_list_nil(), 1000)
+    val lr = parse_array(src, p + 1, max, json_list_nil(), true, 1000)
   in
     case+ lr of
     | ~$R.ok(@(lst, ep)) =>
@@ -403,7 +399,7 @@ in
   end
   (* object *)
   else if $AR.eq_int_int(c, 123) then let (* { *)
-    val er = parse_object(src, p + 1, max, json_entries_nil(), 1000)
+    val er = parse_object(src, p + 1, max, json_entries_nil(), true, 1000)
   in
     case+ er of
     | ~$R.ok(@(ents, ep)) =>
@@ -429,7 +425,7 @@ end
 $UNITTEST.run begin
 
 (* Test: serialize null *)
-val b1 = $B.create()
+var b1: $B.builder_v = $B.create()
 val v1 = json_null()
 val () = serialize(v1, b1)
 val () = json_free(v1)
@@ -437,7 +433,7 @@ val @(a1, l1) = $B.to_arr(b1)
 val () = $A.free<byte>(a1)
 
 (* Test: serialize true *)
-val b2 = $B.create()
+var b2: $B.builder_v = $B.create()
 val v2 = json_bool(true)
 val () = serialize(v2, b2)
 val () = json_free(v2)
@@ -445,7 +441,7 @@ val @(a2, l2) = $B.to_arr(b2)
 val () = $A.free<byte>(a2)
 
 (* Test: serialize integer *)
-val b3 = $B.create()
+var b3: $B.builder_v = $B.create()
 val v3 = json_int(42)
 val () = serialize(v3, b3)
 val () = json_free(v3)
@@ -453,7 +449,7 @@ val @(a3, l3) = $B.to_arr(b3)
 val () = $A.free<byte>(a3)
 
 (* Test: serialize string *)
-val b4 = $B.create()
+var b4: $B.builder_v = $B.create()
 val s4 = $A.alloc<byte>(4096)
 val () = $A.write_byte(s4, 0, 104) (* h *)
 val () = $A.write_byte(s4, 1, 105) (* i *)
@@ -464,14 +460,14 @@ val @(a4, l4) = $B.to_arr(b4)
 val () = $A.free<byte>(a4)
 
 (* Test: roundtrip null *)
-val rt1_b = $B.create()
+var rt1_b: $B.builder_v = $B.create()
 val () = bput(rt1_b, "null")
 val @(rt1_a, rt1_l) = $B.to_arr(rt1_b)
 val @(fz_rt1, bv_rt1) = $A.freeze<byte>(rt1_a)
 val rt1_r = parse(bv_rt1, 0, 524288)
 val () = (case+ rt1_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
@@ -482,14 +478,14 @@ val () = $A.drop<byte>(fz_rt1, bv_rt1)
 val () = $A.free<byte>($A.thaw<byte>(fz_rt1))
 
 (* Test: roundtrip integer *)
-val rt2_b = $B.create()
+var rt2_b: $B.builder_v = $B.create()
 val () = bput(rt2_b, "123")
 val @(rt2_a, rt2_l) = $B.to_arr(rt2_b)
 val @(fz_rt2, bv_rt2) = $A.freeze<byte>(rt2_a)
 val rt2_r = parse(bv_rt2, 0, 524288)
 val () = (case+ rt2_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
@@ -500,14 +496,14 @@ val () = $A.drop<byte>(fz_rt2, bv_rt2)
 val () = $A.free<byte>($A.thaw<byte>(fz_rt2))
 
 (* Test: roundtrip string *)
-val rt3_b = $B.create()
+var rt3_b: $B.builder_v = $B.create()
 val () = bput(rt3_b, "\"hello\"")
 val @(rt3_a, _) = $B.to_arr(rt3_b)
 val @(fz_rt3, bv_rt3) = $A.freeze<byte>(rt3_a)
 val rt3_r = parse(bv_rt3, 0, 524288)
 val () = (case+ rt3_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
@@ -518,14 +514,14 @@ val () = $A.drop<byte>(fz_rt3, bv_rt3)
 val () = $A.free<byte>($A.thaw<byte>(fz_rt3))
 
 (* Test: roundtrip array *)
-val rt4_b = $B.create()
+var rt4_b: $B.builder_v = $B.create()
 val () = bput(rt4_b, "[1,2,3]")
 val @(rt4_a, _) = $B.to_arr(rt4_b)
 val @(fz_rt4, bv_rt4) = $A.freeze<byte>(rt4_a)
 val rt4_r = parse(bv_rt4, 0, 524288)
 val () = (case+ rt4_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
@@ -536,14 +532,14 @@ val () = $A.drop<byte>(fz_rt4, bv_rt4)
 val () = $A.free<byte>($A.thaw<byte>(fz_rt4))
 
 (* Test: roundtrip object *)
-val rt5_b = $B.create()
+var rt5_b: $B.builder_v = $B.create()
 val () = bput(rt5_b, "{\"a\":1,\"b\":true}")
 val @(rt5_a, _) = $B.to_arr(rt5_b)
 val @(fz_rt5, bv_rt5) = $A.freeze<byte>(rt5_a)
 val rt5_r = parse(bv_rt5, 0, 524288)
 val () = (case+ rt5_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
@@ -554,14 +550,14 @@ val () = $A.drop<byte>(fz_rt5, bv_rt5)
 val () = $A.free<byte>($A.thaw<byte>(fz_rt5))
 
 (* Test: roundtrip nested *)
-val rt6_b = $B.create()
+var rt6_b: $B.builder_v = $B.create()
 val () = bput(rt6_b, "{\"x\":[1,{\"y\":null}],\"z\":false}")
 val @(rt6_a, _) = $B.to_arr(rt6_b)
 val @(fz_rt6, bv_rt6) = $A.freeze<byte>(rt6_a)
 val rt6_r = parse(bv_rt6, 0, 524288)
 val () = (case+ rt6_r of
   | ~$R.ok(@(v, _)) => let
-      val b = $B.create()
+      var b: $B.builder_v = $B.create()
       val () = serialize(v, b)
       val () = json_free(v)
       val @(a, _) = $B.to_arr(b)
