@@ -1,0 +1,11 @@
+# Publishes this package to bats-lang/repository-prototype when src/ or
+# bats.toml changes on main. See PUBLISHING-SETUP.md there.
+name: publish
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'bats.toml']
+jobs:
+  publish:
+    uses: bats-lang/repository-prototype/.github/workflows/publish.yml@main
+    secrets: inherit
