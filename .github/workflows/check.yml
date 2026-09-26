@@ -43,3 +43,8 @@ jobs:
         run: |
           export PATH=~/bats-bin:$PATH
           bats check
+
+      - name: Dynamic tests
+        run: |
+          export PATH=~/bats-bin:$PATH
+          tests/dynamic/run.sh ~/repository
