@@ -42,7 +42,9 @@ jobs:
       - name: bats check
         run: |
           export PATH=~/bats-bin:$PATH
-          bats check
+          git clone https://github.com/bats-lang/repository-prototype.git ~/repository
+          bats lock --repository ~/repository
+          bats check --repository ~/repository
 
       - name: Dynamic tests
         run: |
