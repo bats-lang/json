@@ -164,15 +164,16 @@ implement serialize_entries(ents, b, first) =
    Deserialize: byte buffer → JSON value
    ============================================================ *)
 
-fn rd {l:agz}{n:pos}
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n): int =
-  let val p = $AR.checked_idx(pos, max) in
-    if p >= 0 then byte2int0($A.read<byte>(src, p))
-    else 0
-  end
+(* Byte at pos, or ~1 past the end of the input. The p < n test is what
+   makes the read safe: the old version cast pos to an index unchecked
+   and read out of bounds on truncated input. *)
+fn rd {l:agz}{n:pos}{p:nat}
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n): int =
+  if pos < max then byte2int0($A.read<byte>(src, pos))
+  else ~1
 
-fun skip_ws {l:agz}{n:pos}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n, fuel: int fuel): int =
+fun skip_ws {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, fuel: int fuel): [q:nat] int q =
   if fuel <= 0 then pos
   else let val c = rd(src, pos, max) in
     if $AR.eq_int_int(c, 32) || $AR.eq_int_int(c, 9) ||
@@ -181,38 +182,47 @@ fun skip_ws {l:agz}{n:pos}{fuel:nat} .<fuel>.
     else pos
   end
 
-fun parse_string {l:agz}{n:pos}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n, fuel: int fuel
-  ): @([ls:agz] $A.arr(byte, ls, 4096), [dlen:nat | dlen <= 4096] int dlen, int) =
+(* Parses the body of a string after its opening quote. The last
+   component says whether the closing quote was found; an unterminated
+   string (end of input, or longer than the 4096-byte buffer) is not. *)
+fun parse_string {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, fuel: int fuel
+  ): @([ls:agz] $A.arr(byte, ls, 4096), [dlen:nat | dlen <= 4096] int dlen, [q:nat] int q, bool) =
   let
     val out = $A.alloc<byte>(4096)
-    fun loop {lo:agz}{opos:nat | opos <= 4096}{fuel2:nat} .<fuel2>.
-      (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-       out: !$A.arr(byte, lo, 4096), opos: int opos, fuel2: int fuel2): @([r:nat | r <= 4096] int r, int) =
-      if fuel2 <= 0 then @(opos, pos)
+    fun loop {lo:agz}{pp:nat}{opos:nat | opos <= 4096}{fuel2:nat} .<fuel2>.
+      (src: !$A.borrow(byte, l, n), pos: int pp, max: int n,
+       out: !$A.arr(byte, lo, 4096), opos: int opos, fuel2: int fuel2)
+      : @([r:nat | r <= 4096] int r, [q:nat] int q, bool) =
+      if fuel2 <= 0 then @(opos, pos, false)
       else let val c = rd(src, pos, max) in
-        if $AR.eq_int_int(c, 34) then @(opos, pos + 1) (* closing " *)
-        else if opos >= 4095 then @(opos, pos) (* buffer full *)
+        if c < 0 then @(opos, pos, false) (* end of input *)
+        else if $AR.eq_int_int(c, 34) then @(opos, pos + 1, true) (* closing " *)
+        else if opos >= 4095 then @(opos, pos, false) (* buffer full *)
         else if $AR.eq_int_int(c, 92) then let (* backslash escape *)
           val c2 = rd(src, pos + 1, max)
-          val ec = (if $AR.eq_int_int(c2, 110) then 10        (* \n *)
-                    else if $AR.eq_int_int(c2, 116) then 9    (* \t *)
-                    else if $AR.eq_int_int(c2, 114) then 13   (* \r *)
-                    else if $AR.eq_int_int(c2, 34) then 34    (* \" *)
-                    else if $AR.eq_int_int(c2, 92) then 92    (* \\ *)
-                    else c2): int
-          val () = $A.set<byte>(out, opos, int2byte0(ec))
-        in loop(src, pos + 2, max, out, opos + 1, fuel2 - 1) end
+        in
+          if c2 < 0 then @(opos, pos, false)
+          else let
+            val ec = (if $AR.eq_int_int(c2, 110) then 10        (* \n *)
+                      else if $AR.eq_int_int(c2, 116) then 9    (* \t *)
+                      else if $AR.eq_int_int(c2, 114) then 13   (* \r *)
+                      else if $AR.eq_int_int(c2, 34) then 34    (* \" *)
+                      else if $AR.eq_int_int(c2, 92) then 92    (* \\ *)
+                      else c2): int
+            val () = $A.set<byte>(out, opos, int2byte0(ec))
+          in loop(src, pos + 2, max, out, opos + 1, fuel2 - 1) end
+        end
         else let
           val () = $A.set<byte>(out, opos, int2byte0(c))
         in loop(src, pos + 1, max, out, opos + 1, fuel2 - 1) end
       end
-    val @(olen, epos) = loop(src, pos, max, out, 0, fuel)
-  in @(out, olen, epos) end
+    val @(olen, epos, closed) = loop(src, pos, max, out, 0, fuel)
+  in @(out, olen, epos, closed) end
 
-fun parse_int {l:agz}{n:pos}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-   acc: int, neg: bool, fuel: int fuel): @(int, int) =
+fun parse_int {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
+   acc: int, neg: bool, fuel: int fuel): @(int, [q:nat] int q) =
   if fuel <= 0 then @((if neg then ~acc else acc), pos)
   else let val c = rd(src, pos, max) in
     if c >= 48 then if c <= 57 then
@@ -221,12 +231,12 @@ fun parse_int {l:agz}{n:pos}{fuel:nat} .<fuel>.
     else @((if neg then ~acc else acc), pos)
   end
 
-#pub fun parse {l:agz}{n:pos}
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n
-  ): $R.result(@(json_v, int), int)
+#pub fun parse {l:agz}{n:pos}{p:nat}
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n
+  ): $R.result(@(json_v, [q:nat] int q), int)
 
-fn skip_comma {l:agz}{n:pos}
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n, first: bool): int =
+fn skip_comma {l:agz}{n:pos}{p:nat}
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, first: bool): [q:nat] int q =
   if first then pos
   else let
     val pc = skip_ws(src, pos, max, 256)
@@ -236,9 +246,9 @@ fn skip_comma {l:agz}{n:pos}
     else pc
   end
 
-fun parse_array {l:agz}{n:pos}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-   acc: json_list_v, first: bool, fuel: int fuel): $R.result(@(json_list_v, int), int) =
+fun parse_array {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
+   acc: json_list_v, first: bool, fuel: int fuel): $R.result(@(json_list_v, [q:nat] int q), int) =
   if fuel <= 0 then let
     val () = json_list_free(acc)
   in $R.err(pos) end
@@ -261,9 +271,9 @@ fun parse_array {l:agz}{n:pos}{fuel:nat} .<fuel>.
     end
   end
 
-fun parse_object {l:agz}{n:pos}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int, max: int n,
-   acc: json_entries_v, first: bool, fuel: int fuel): $R.result(@(json_entries_v, int), int) =
+fun parse_object {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
+   acc: json_entries_v, first: bool, fuel: int fuel): $R.result(@(json_entries_v, [q:nat] int q), int) =
   if fuel <= 0 then let
     val () = json_entries_free(acc)
   in $R.err(pos) end
@@ -278,11 +288,15 @@ fun parse_object {l:agz}{n:pos}{fuel:nat} .<fuel>.
       val ck = rd(src, p2, max)
     in
       if $AR.eq_int_int(ck, 34) then let (* " for key *)
-        val @(karr, klen, kep) = parse_string(src, p2 + 1, max, $AR.checked_nat(4096))
+        val @(karr, klen, kep, kclosed) = parse_string(src, p2 + 1, max, 4096)
         val p3 = skip_ws(src, kep, max, 256)
         val colon = rd(src, p3, max)
       in
-        if $AR.eq_int_int(colon, 58) then let (* : *)
+        if ~kclosed then let
+          val () = $A.free<byte>(karr)
+          val () = json_entries_free(acc)
+        in $R.err(kep) end
+        else if $AR.eq_int_int(colon, 58) then let (* : *)
           val p4 = skip_ws(src, p3 + 1, max, 256)
           val vr = parse(src, p4, max)
         in
@@ -356,8 +370,11 @@ in
     else $R.err(p)
   (* string *)
   else if $AR.eq_int_int(c, 34) then let (* " *)
-    val @(arr, len, ep) = parse_string(src, p + 1, max, $AR.checked_nat(4096))
-  in $R.ok(@(json_str(arr, len), ep)) end
+    val @(arr, len, ep, closed) = parse_string(src, p + 1, max, 4096)
+  in
+    if closed then $R.ok(@(json_str(arr, len), ep))
+    else let val () = $A.free<byte>(arr) in $R.err(ep) end
+  end
   (* array *)
   else if $AR.eq_int_int(c, 91) then let (* [ *)
     val lr = parse_array(src, p + 1, max, json_list_nil(), true, 1000)

@@ -1,0 +1,9 @@
+[package]
+name = "parse"
+kind = "bin"
+
+[dependencies]
+"array" = ""
+"result" = ""
+"str" = ""
+"json" = ""
