@@ -33,7 +33,9 @@ for d in "$ROOT"/tests/dynamic/*/; do
   [ -f "$d/bats.toml" ] || continue
   n=$(basename "$d"); w="$TMP/w-$n"
   cp -R "$d" "$w"
-  if (cd "$w" && bats lock --repository "$TMP/repo" && bats build --only debug --only native --repository "$TMP/repo") > "$TMP/$n.log" 2>&1 \
+  # --dev: the checkout uploads as a dev version, which bats lock skips
+  # without it (as the Rust bats does).
+  if (cd "$w" && bats lock --dev --repository "$TMP/repo" && bats build --only debug --only native --repository "$TMP/repo") > "$TMP/$n.log" 2>&1 \
      && (cd "$w" && $LIMIT "./dist/debug/$n") > "$TMP/$n.out" 2>&1 \
      && { [ ! -f "$d/expected" ] || diff -u "$d/expected" "$TMP/$n.out"; }; then
     echo "ok   $n"
