@@ -44,29 +44,37 @@ and json_entries(int) =
 
 #pub fun json_entries_free {sz:nat} (ents: json_entries(sz)): void
 
-implement json_free(v) =
+(* A value's parts are smaller than it: .<sz, 0>. for a value and
+   .<sz, 1>. for a list or entries decrease on every call *)
+fun _free {sz:nat} .<sz, 0>. (v: json(sz)): void =
   case+ v of
   | ~json_null() => ()
   | ~json_bool(_) => ()
   | ~json_int(_) => ()
   | ~json_str(arr, _) => $A.free<byte>(arr)
-  | ~json_arr(lst) => json_list_free(lst)
-  | ~json_obj(ents) => json_entries_free(ents)
+  | ~json_arr(lst) => _free_list(lst)
+  | ~json_obj(ents) => _free_entries(ents)
 
-implement json_list_free(lst) =
+and _free_list {sz:nat} .<sz, 1>. (lst: json_list(sz)): void =
   case+ lst of
   | ~json_list_nil() => ()
   | ~json_list_cons(v, rest) => let
-      val () = json_free(v)
-    in json_list_free(rest) end
+      val () = _free(v)
+    in _free_list(rest) end
 
-implement json_entries_free(ents) =
+and _free_entries {sz:nat} .<sz, 1>. (ents: json_entries(sz)): void =
   case+ ents of
   | ~json_entries_nil() => ()
   | ~json_entries_cons(k, _, v, rest) => let
       val () = $A.free<byte>(k)
-      val () = json_free(v)
-    in json_entries_free(rest) end
+      val () = _free(v)
+    in _free_entries(rest) end
+
+implement json_free(v) = _free(v)
+
+implement json_list_free(lst) = _free_list(lst)
+
+implement json_entries_free(ents) = _free_entries(ents)
 
 (* ============================================================
    Serialize: JSON value → builder (compile-time bounds only)
@@ -122,7 +130,9 @@ in loop(b, arr, 0, len, 8192) end
    b: !$B.builder(n) >> [m:nat | n <= m; m <= n + sz] $B.builder(m),
    first: bool): void
 
-implement serialize(v, b) =
+fun _ser {sz:nat}{n:nat | n + sz <= $B.BUILDER_CAP} .<sz, 0>.
+  (v: !json(sz),
+   b: !$B.builder(n) >> [m:nat | n <= m; m <= n + sz] $B.builder(m)): void =
   case+ v of
   | json_null() => $B.bput(b, "null")
   | json_bool(t) => (if t then $B.bput(b, "true") else $B.bput(b, "false"))
@@ -133,22 +143,28 @@ implement serialize(v, b) =
     in $B.put_byte(b, 34) end
   | json_arr(lst) => let
       val () = $B.put_byte(b, 91)
-      val () = serialize_list(lst, b, true)
+      val () = _ser_list(lst, b, true)
     in $B.put_byte(b, 93) end
   | json_obj(ents) => let
       val () = $B.put_byte(b, 123)
-      val () = serialize_entries(ents, b, true)
+      val () = _ser_entries(ents, b, true)
     in $B.put_byte(b, 125) end
 
-implement serialize_list(lst, b, first) =
+and _ser_list {sz:nat}{n:nat | n + sz <= $B.BUILDER_CAP} .<sz, 1>.
+  (lst: !json_list(sz),
+   b: !$B.builder(n) >> [m:nat | n <= m; m <= n + sz] $B.builder(m),
+   first: bool): void =
   case+ lst of
   | json_list_nil() => ()
   | json_list_cons(v, rest) => let
       val () = (if ~first then $B.put_byte(b, 44) else ())
-      val () = serialize(v, b)
-    in serialize_list(rest, b, false) end
+      val () = _ser(v, b)
+    in _ser_list(rest, b, false) end
 
-implement serialize_entries(ents, b, first) =
+and _ser_entries {sz:nat}{n:nat | n + sz <= $B.BUILDER_CAP} .<sz, 1>.
+  (ents: !json_entries(sz),
+   b: !$B.builder(n) >> [m:nat | n <= m; m <= n + sz] $B.builder(m),
+   first: bool): void =
   case+ ents of
   | json_entries_nil() => ()
   | json_entries_cons(k, klen, v, rest) => let
@@ -157,365 +173,252 @@ implement serialize_entries(ents, b, first) =
       val () = emit_escaped(b, k, klen)
       val () = $B.put_byte(b, 34)
       val () = $B.put_byte(b, 58)
-      val () = serialize(v, b)
-    in serialize_entries(rest, b, false) end
+      val () = _ser(v, b)
+    in _ser_entries(rest, b, false) end
+
+implement serialize(v, b) = _ser(v, b)
+
+implement serialize_list(lst, b, first) = _ser_list(lst, b, first)
+
+implement serialize_entries(ents, b, first) = _ser_entries(ents, b, first)
 
 (* ============================================================
    Deserialize: byte buffer → JSON value
+   Positions are p <= n, the buffer's size; every scanner recurses on
+   n - p, and a value that parses ends past where it began, so the
+   value, array and object parsers recurse on (n - p, 0) and (n - p, 1).
    ============================================================ *)
 
-(* Byte at pos, or ~1 past the end of the input. The p < n test is what
-   makes the read safe: the old version cast pos to an index unchecked
-   and read out of bounds on truncated input. *)
+(* Byte at pos, or ~1 at or past the end of the input *)
 fn rd {l:agz}{n:pos}{p:nat}
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n): int =
   if pos < max then byte2int0($A.read<byte>(src, pos))
   else ~1
 
-fun skip_ws {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, fuel: int fuel): [q:nat] int q =
-  if fuel <= 0 then pos
+fun skip_ws {l:agz}{n:pos}{p:nat | p <= n} .<n - p>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n): [q:int | p <= q; q <= n] int q =
+  if pos >= max then pos
   else let val c = rd(src, pos, max) in
     if $AR.eq_int_int(c, 32) || $AR.eq_int_int(c, 9) ||
        $AR.eq_int_int(c, 10) || $AR.eq_int_int(c, 13)
-    then skip_ws(src, pos + 1, max, fuel - 1)
+    then skip_ws(src, pos + 1, max)
     else pos
   end
 
 (* Parses the body of a string after its opening quote. The last
    component says whether the closing quote was found; an unterminated
    string (end of input, or longer than the 4096-byte buffer) is not. *)
-fun parse_string {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, fuel: int fuel
-  ): @([ls:agz] $A.arr(byte, ls, 4096), [dlen:nat | dlen <= 4096] int dlen, [q:nat] int q, bool) =
-  let
-    val out = $A.alloc<byte>(4096)
-    fun loop {lo:agz}{pp:nat}{opos:nat | opos <= 4096}{fuel2:nat} .<fuel2>.
-      (src: !$A.borrow(byte, l, n), pos: int pp, max: int n,
-       out: !$A.arr(byte, lo, 4096), opos: int opos, fuel2: int fuel2)
-      : @([r:nat | r <= 4096] int r, [q:nat] int q, bool) =
-      if fuel2 <= 0 then @(opos, pos, false)
-      else let val c = rd(src, pos, max) in
-        if c < 0 then @(opos, pos, false) (* end of input *)
-        else if $AR.eq_int_int(c, 34) then @(opos, pos + 1, true) (* closing " *)
-        else if opos >= 4095 then @(opos, pos, false) (* buffer full *)
-        else if $AR.eq_int_int(c, 92) then let (* backslash escape *)
-          val c2 = rd(src, pos + 1, max)
-        in
-          if c2 < 0 then @(opos, pos, false)
-          else let
-            val ec = (if $AR.eq_int_int(c2, 110) then 10        (* \n *)
-                      else if $AR.eq_int_int(c2, 116) then 9    (* \t *)
-                      else if $AR.eq_int_int(c2, 114) then 13   (* \r *)
-                      else if $AR.eq_int_int(c2, 34) then 34    (* \" *)
-                      else if $AR.eq_int_int(c2, 92) then 92    (* \\ *)
-                      else c2): int
-            val () = $A.set<byte>(out, opos, int2byte0(ec))
-          in loop(src, pos + 2, max, out, opos + 1, fuel2 - 1) end
-        end
+fn parse_string {l:agz}{n:pos}{p:nat | p <= n}
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n)
+  : @([ls:agz] $A.arr(byte, ls, 4096), [dlen:nat | dlen <= 4096] int dlen,
+      [q:int | p <= q; q <= n] int q, bool) = let
+  val out = $A.alloc<byte>(4096)
+  fun loop {lo:agz}{pp:nat | p <= pp; pp <= n}{opos:nat | opos <= 4096} .<n - pp>.
+    (src: !$A.borrow(byte, l, n), pos: int pp, max: int n,
+     out: !$A.arr(byte, lo, 4096), opos: int opos)
+    : @([r:nat | r <= 4096] int r, [q:int | p <= q; q <= n] int q, bool) =
+    if pos >= max then @(opos, pos, false) (* end of input *)
+    else let val c = rd(src, pos, max) in
+      if $AR.eq_int_int(c, 34) then @(opos, pos + 1, true) (* closing " *)
+      else if opos >= 4095 then @(opos, pos, false) (* buffer full *)
+      else if $AR.eq_int_int(c, 92) then (* backslash escape *)
+        if pos + 1 >= max then @(opos, pos, false)
         else let
-          val () = $A.set<byte>(out, opos, int2byte0(c))
-        in loop(src, pos + 1, max, out, opos + 1, fuel2 - 1) end
-      end
-    val @(olen, epos, closed) = loop(src, pos, max, out, 0, fuel)
-  in @(out, olen, epos, closed) end
+          val c2 = rd(src, pos + 1, max)
+          val ec = (if $AR.eq_int_int(c2, 110) then 10        (* \n *)
+                    else if $AR.eq_int_int(c2, 116) then 9    (* \t *)
+                    else if $AR.eq_int_int(c2, 114) then 13   (* \r *)
+                    else if $AR.eq_int_int(c2, 34) then 34    (* \" *)
+                    else if $AR.eq_int_int(c2, 92) then 92    (* \\ *)
+                    else c2): int
+          val () = $A.set<byte>(out, opos, int2byte0(ec))
+        in loop(src, pos + 2, max, out, opos + 1) end
+      else let
+        val () = $A.set<byte>(out, opos, int2byte0(c))
+      in loop(src, pos + 1, max, out, opos + 1) end
+    end
+  val @(olen, epos, closed) = loop(src, pos, max, out, 0)
+in @(out, olen, epos, closed) end
 
-fun parse_int {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
-   acc: int, neg: bool, fuel: int fuel): @(int, [q:nat] int q) =
-  if fuel <= 0 then @((if neg then ~acc else acc), pos)
-  else let val c = rd(src, pos, max) in
-    if c >= 48 then if c <= 57 then
-      parse_int(src, pos + 1, max, acc * 10 + (c - 48), neg, fuel - 1)
-    else @((if neg then ~acc else acc), pos)
-    else @((if neg then ~acc else acc), pos)
+(* The digits at pos, after acc (the digits so far, as a non-positive
+   number, so that the minimum int fits): whether the number fits in an
+   int, its value, and its end *)
+fun parse_int {l:agz}{n:pos}{p:nat | p <= n} .<n - p>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, acc: int, neg: bool)
+  : @(bool, int, [q:int | p <= q; q <= n] int q) =
+  let
+    val c = (if pos < max then rd(src, pos, max) else ~1): int
+  in
+    if c >= 48 && c <= 57 then let
+      val d = c - 48
+      val lim = (if neg then 8 else 7): int
+    in
+      if acc < ~214748364 || (acc = ~214748364 && d > lim) then @(false, 0, pos)
+      else if pos < max then parse_int(src, pos + 1, max, acc * 10 - d, neg)
+      else @(false, 0, pos)
+    end
+    else @(true, (if neg then acc else ~acc), pos)
   end
 
 #pub fun parse {l:agz}{n:pos}{p:nat}
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n
   ): $R.result(@(json_v, [q:nat] int q), int)
 
-fn skip_comma {l:agz}{n:pos}{p:nat}
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, first: bool): [q:nat] int q =
+fn skip_comma {l:agz}{n:pos}{p:nat | p <= n}
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n, first: bool): [q:int | p <= q; q <= n] int q =
   if first then pos
   else let
-    val pc = skip_ws(src, pos, max, 256)
-    val cc = rd(src, pc, max)
+    val pc = skip_ws(src, pos, max)
   in
-    if $AR.eq_int_int(cc, 44) then skip_ws(src, pc + 1, max, 256)
+    if pc < max then
+      (if $AR.eq_int_int(rd(src, pc, max), 44) then skip_ws(src, pc + 1, max) else pc)
     else pc
   end
 
-fun parse_array {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
-   acc: json_list_v, first: bool, fuel: int fuel): $R.result(@(json_list_v, [q:nat] int q), int) =
-  if fuel <= 0 then let
-    val () = json_list_free(acc)
-  in $R.err(pos) end
-  else let
-    val p = skip_ws(src, pos, max, 256)
-    val c = rd(src, p, max)
-  in
-    if $AR.eq_int_int(c, 93) then (* ] *)
-      $R.ok(@(acc, p + 1))
-    else let
-      val p2 = skip_comma(src, p, max, first)
-      val vr = parse(src, p2, max)
-    in
-      case+ vr of
-      | ~$R.ok(@(v, ep)) =>
-          parse_array(src, ep, max, json_list_cons(v, acc), false, fuel - 1)
-      | ~$R.err(e) => let
-          val () = json_list_free(acc)
-        in $R.err(e) end
-    end
-  end
-
-fun parse_object {l:agz}{n:pos}{p:nat}{fuel:nat} .<fuel>.
-  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
-   acc: json_entries_v, first: bool, fuel: int fuel): $R.result(@(json_entries_v, [q:nat] int q), int) =
-  if fuel <= 0 then let
-    val () = json_entries_free(acc)
-  in $R.err(pos) end
-  else let
-    val p = skip_ws(src, pos, max, 256)
-    val c = rd(src, p, max)
-  in
-    if $AR.eq_int_int(c, 125) then (* } *)
-      $R.ok(@(acc, p + 1))
-    else let
-      val p2 = skip_comma(src, p, max, first)
-      val ck = rd(src, p2, max)
-    in
-      if $AR.eq_int_int(ck, 34) then let (* " for key *)
-        val @(karr, klen, kep, kclosed) = parse_string(src, p2 + 1, max, 4096)
-        val p3 = skip_ws(src, kep, max, 256)
-        val colon = rd(src, p3, max)
-      in
-        if ~kclosed then let
-          val () = $A.free<byte>(karr)
-          val () = json_entries_free(acc)
-        in $R.err(kep) end
-        else if $AR.eq_int_int(colon, 58) then let (* : *)
-          val p4 = skip_ws(src, p3 + 1, max, 256)
-          val vr = parse(src, p4, max)
-        in
-          case+ vr of
-          | ~$R.ok(@(v, vep)) =>
-              parse_object(src, vep, max,
-                json_entries_cons(karr, klen, v, acc), false, fuel - 1)
-          | ~$R.err(e) => let
-              val () = $A.free<byte>(karr)
-              val () = json_entries_free(acc)
-            in $R.err(e) end
-        end
-        else let
-          val () = $A.free<byte>(karr)
-          val () = json_entries_free(acc)
-        in $R.err(p3) end
-      end
-      else let
-        val () = json_entries_free(acc)
-      in $R.err(p2) end
-    end
-  end
-
-fun reverse_list {fuel:nat} .<fuel>.
-  (lst: json_list_v, acc: json_list_v, fuel: int fuel): json_list_v =
-  if fuel <= 0 then let val () = json_list_free(lst) in acc end
-  else case+ lst of
+(* lst reversed onto acc *)
+fun reverse_list {s,a:nat} .<s>.
+  (lst: json_list(s), acc: json_list(a)): json_list(s + a) =
+  case+ lst of
   | ~json_list_nil() => acc
-  | ~json_list_cons(v, rest) => reverse_list(rest, json_list_cons(v, acc), fuel - 1)
+  | ~json_list_cons(v, rest) => reverse_list(rest, json_list_cons(v, acc))
 
-fun reverse_entries {fuel:nat} .<fuel>.
-  (ents: json_entries_v, acc: json_entries_v, fuel: int fuel): json_entries_v =
-  if fuel <= 0 then let val () = json_entries_free(ents) in acc end
-  else case+ ents of
+fun reverse_entries {s,a:nat} .<s>.
+  (ents: json_entries(s), acc: json_entries(a)): json_entries(s + a) =
+  case+ ents of
   | ~json_entries_nil() => acc
-  | ~json_entries_cons(k, kl, v, rest) =>
-      reverse_entries(rest, json_entries_cons(k, kl, v, acc), fuel - 1)
+  | ~json_entries_cons(k, kl, v, rest) => reverse_entries(rest, json_entries_cons(k, kl, v, acc))
 
-implement parse (src, pos, max) = let
-  val p = skip_ws(src, pos, max, 256)
-  val c = rd(src, p, max)
+(* Whether src[p, p + 4) is c0 c1 c2 c3 *)
+fn at4 {l:agz}{n:pos}{p:nat}
+  (src: !$A.borrow(byte, l, n), p: int p, max: int n, c0: int, c1: int, c2: int, c3: int): bool =
+  $AR.eq_int_int(rd(src, p, max), c0) && $AR.eq_int_int(rd(src, p + 1, max), c1) &&
+  $AR.eq_int_int(rd(src, p + 2, max), c2) && $AR.eq_int_int(rd(src, p + 3, max), c3)
+
+(* The value at pos (after blanks), and its end, which is past pos *)
+fun _parse {l:agz}{n:pos}{p:nat | p <= n} .<n - p, 0>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n
+  ): $R.result(@(json_v, [q:int | p < q; q <= n] int q), int) = let
+  val [q1:int] p1 = skip_ws(src, pos, max)
 in
-  (* null *)
-  if $AR.eq_int_int(c, 110) then (* n *)
-    if $AR.eq_int_int(rd(src, p+1, max), 117) then
-    if $AR.eq_int_int(rd(src, p+2, max), 108) then
-    if $AR.eq_int_int(rd(src, p+3, max), 108) then
-      $R.ok(@(json_null(), p + 4))
-    else $R.err(p)
-    else $R.err(p)
-    else $R.err(p)
-  (* true *)
-  else if $AR.eq_int_int(c, 116) then (* t *)
-    if $AR.eq_int_int(rd(src, p+1, max), 114) then
-    if $AR.eq_int_int(rd(src, p+2, max), 117) then
-    if $AR.eq_int_int(rd(src, p+3, max), 101) then
-      $R.ok(@(json_bool(true), p + 4))
-    else $R.err(p)
-    else $R.err(p)
-    else $R.err(p)
-  (* false *)
-  else if $AR.eq_int_int(c, 102) then (* f *)
-    if $AR.eq_int_int(rd(src, p+1, max), 97) then
-    if $AR.eq_int_int(rd(src, p+2, max), 108) then
-    if $AR.eq_int_int(rd(src, p+3, max), 115) then
-    if $AR.eq_int_int(rd(src, p+4, max), 101) then
-      $R.ok(@(json_bool(false), p + 5))
-    else $R.err(p)
-    else $R.err(p)
-    else $R.err(p)
-    else $R.err(p)
-  (* string *)
-  else if $AR.eq_int_int(c, 34) then let (* " *)
-    val @(arr, len, ep, closed) = parse_string(src, p + 1, max, 4096)
-  in
-    if closed then $R.ok(@(json_str(arr, len), ep))
-    else let val () = $A.free<byte>(arr) in $R.err(ep) end
+  if p1 >= max then $R.err(p1)
+  else let val c = rd(src, p1, max) in
+    (* null *)
+    if $AR.eq_int_int(c, 110) then
+      if p1 + 4 <= max then
+        (if at4(src, p1, max, 110, 117, 108, 108) then $R.ok(@(json_null(), p1 + 4)) else $R.err(p1))
+      else $R.err(p1)
+    (* true *)
+    else if $AR.eq_int_int(c, 116) then
+      if p1 + 4 <= max then
+        (if at4(src, p1, max, 116, 114, 117, 101) then $R.ok(@(json_bool(true), p1 + 4)) else $R.err(p1))
+      else $R.err(p1)
+    (* false *)
+    else if $AR.eq_int_int(c, 102) then
+      if p1 + 5 <= max then
+        (if at4(src, p1 + 1, max, 97, 108, 115, 101) then $R.ok(@(json_bool(false), p1 + 5)) else $R.err(p1))
+      else $R.err(p1)
+    (* string *)
+    else if $AR.eq_int_int(c, 34) then let
+      val @(arr, len, ep, closed) = parse_string(src, p1 + 1, max)
+    in
+      if closed then $R.ok(@(json_str(arr, len), ep))
+      else let val () = $A.free<byte>(arr) in $R.err(ep) end
+    end
+    (* array *)
+    else if $AR.eq_int_int(c, 91) then
+      (case+ _parse_array{l}{n}{q1+1}(src, p1 + 1, max, json_list_nil(), true) of
+       | ~$R.ok(@(lst, ep)) => $R.ok(@(json_arr(reverse_list(lst, json_list_nil())), ep))
+       | ~$R.err(e) => $R.err(e))
+    (* object *)
+    else if $AR.eq_int_int(c, 123) then
+      (case+ _parse_object{l}{n}{q1+1}(src, p1 + 1, max, json_entries_nil(), true) of
+       | ~$R.ok(@(ents, ep)) => $R.ok(@(json_obj(reverse_entries(ents, json_entries_nil())), ep))
+       | ~$R.err(e) => $R.err(e))
+    (* number: the first digit is consumed here, so the end is past p1 *)
+    else if c >= 48 && c <= 57 then let
+      val @(fits, v, ep) = parse_int(src, p1 + 1, max, 48 - c, false)
+    in if fits then $R.ok(@(json_int(v), ep)) else $R.err(p1) end
+    (* negative number *)
+    else if $AR.eq_int_int(c, 45) then let
+      val @(fits, v, ep) = parse_int(src, p1 + 1, max, 0, true)
+    in if fits then $R.ok(@(json_int(v), ep)) else $R.err(p1) end
+    else $R.err(p1)
   end
-  (* array *)
-  else if $AR.eq_int_int(c, 91) then let (* [ *)
-    val lr = parse_array(src, p + 1, max, json_list_nil(), true, 1000)
-  in
-    case+ lr of
-    | ~$R.ok(@(lst, ep)) =>
-        $R.ok(@(json_arr(reverse_list(lst, json_list_nil(), 1000)), ep))
-    | ~$R.err(e) => $R.err(e)
-  end
-  (* object *)
-  else if $AR.eq_int_int(c, 123) then let (* { *)
-    val er = parse_object(src, p + 1, max, json_entries_nil(), true, 1000)
-  in
-    case+ er of
-    | ~$R.ok(@(ents, ep)) =>
-        $R.ok(@(json_obj(reverse_entries(ents, json_entries_nil(), 1000)), ep))
-    | ~$R.err(e) => $R.err(e)
-  end
-  (* number *)
-  else if c >= 48 then if c <= 57 then let (* 0-9 *)
-    val @(n, ep) = parse_int(src, p, max, 0, false, 100)
-  in $R.ok(@(json_int(n), ep)) end
-  else $R.err(p)
-  (* negative number *)
-  else if $AR.eq_int_int(c, 45) then let (* - *)
-    val @(n, ep) = parse_int(src, p + 1, max, 0, true, 100)
-  in $R.ok(@(json_int(n), ep)) end
-  else $R.err(p)
 end
 
-(* ============================================================
-   Unit tests
-   ============================================================ *)
-
-$UNITTEST.run begin
-
-(* Test: serialize null *)
-var b1 = $B.create()
-val v1 = json_null()
-val () = serialize(v1, b1)
-val () = json_free(v1)
-val @(a1, l1) = $B.to_arr(b1)
-val () = $A.free<byte>(a1)
-
-(* Test: serialize true *)
-var b2 = $B.create()
-val v2 = json_bool(true)
-val () = serialize(v2, b2)
-val () = json_free(v2)
-val @(a2, l2) = $B.to_arr(b2)
-val () = $A.free<byte>(a2)
-
-(* Test: serialize integer *)
-var b3 = $B.create()
-val v3 = json_int(42)
-val () = serialize(v3, b3)
-val () = json_free(v3)
-val @(a3, l3) = $B.to_arr(b3)
-val () = $A.free<byte>(a3)
-
-(* Test: serialize string *)
-var b4 = $B.create()
-val s4 = $A.alloc<byte>(4096)
-val () = $A.write_byte(s4, 0, 104) (* h *)
-val () = $A.write_byte(s4, 1, 105) (* i *)
-val v4 = json_str(s4, 2)
-val () = serialize(v4, b4)
-val () = json_free(v4)
-val @(a4, l4) = $B.to_arr(b4)
-val () = $A.free<byte>(a4)
-
-(* Test: roundtrip null *)
-var rt1_b = $B.create()
-val () = $B.bput(rt1_b, "null")
-val @(rt1_a, rt1_l) = $B.to_arr(rt1_b)
-val @(fz_rt1, bv_rt1) = $A.freeze<byte>(rt1_a)
-val rt1_r = parse(bv_rt1, 0, 524288)
-val () = (case+ rt1_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt1, bv_rt1)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt1))
-
-(* Test: roundtrip integer *)
-var rt2_b = $B.create()
-val () = $B.bput(rt2_b, "123")
-val @(rt2_a, rt2_l) = $B.to_arr(rt2_b)
-val @(fz_rt2, bv_rt2) = $A.freeze<byte>(rt2_a)
-val rt2_r = parse(bv_rt2, 0, 524288)
-val () = (case+ rt2_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt2, bv_rt2)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt2))
-
-(* Test: roundtrip string *)
-var rt3_b = $B.create()
-val () = $B.bput(rt3_b, "\"hello\"")
-val @(rt3_a, _) = $B.to_arr(rt3_b)
-val @(fz_rt3, bv_rt3) = $A.freeze<byte>(rt3_a)
-val rt3_r = parse(bv_rt3, 0, 524288)
-val () = (case+ rt3_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt3, bv_rt3)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt3))
-
-(* Test: roundtrip array *)
-var rt4_b = $B.create()
-val () = $B.bput(rt4_b, "[1,2,3]")
-val @(rt4_a, _) = $B.to_arr(rt4_b)
-val @(fz_rt4, bv_rt4) = $A.freeze<byte>(rt4_a)
-val rt4_r = parse(bv_rt4, 0, 524288)
-val () = (case+ rt4_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt4, bv_rt4)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt4))
-
-(* Test: roundtrip object *)
-var rt5_b = $B.create()
-val () = $B.bput(rt5_b, "{\"a\":1,\"b\":true}")
-val @(rt5_a, _) = $B.to_arr(rt5_b)
-val @(fz_rt5, bv_rt5) = $A.freeze<byte>(rt5_a)
-val rt5_r = parse(bv_rt5, 0, 524288)
-val () = (case+ rt5_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt5, bv_rt5)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt5))
-
-(* Test: roundtrip nested *)
-var rt6_b = $B.create()
-val () = $B.bput(rt6_b, "{\"x\":[1,{\"y\":null}],\"z\":false}")
-val @(rt6_a, _) = $B.to_arr(rt6_b)
-val @(fz_rt6, bv_rt6) = $A.freeze<byte>(rt6_a)
-val rt6_r = parse(bv_rt6, 0, 524288)
-val () = (case+ rt6_r of
-  | ~$R.ok(@(v, _)) => json_free(v)
-  | ~$R.err(_) => ())
-val () = $A.drop<byte>(fz_rt6, bv_rt6)
-val () = $A.free<byte>($A.thaw<byte>(fz_rt6))
-
+(* The elements from pos to the closing ], onto acc (newest first) *)
+and _parse_array {l:agz}{n:pos}{s:nat}{p:nat | s <= p; p <= n} .<n - p, 1>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
+   acc: json_list_v, first: bool): $R.result(@(json_list_v, [q:int | s <= q; q <= n] int q), int) = let
+  val p1 = skip_ws(src, pos, max)
+in
+  if p1 >= max then let
+    val () = json_list_free(acc)
+  in $R.err(p1) end
+  else if $AR.eq_int_int(rd(src, p1, max), 93) then (* ] *)
+    $R.ok(@(acc, p1 + 1))
+  else let
+    val p2 = skip_comma(src, p1, max, first)
+  in
+    case+ _parse(src, p2, max) of
+    | ~$R.ok(@(v, ep)) => _parse_array{l}{n}{s}(src, ep, max, json_list_cons(v, acc), false)
+    | ~$R.err(e) => let
+        val () = json_list_free(acc)
+      in $R.err(e) end
+  end
 end
+
+(* The entries from pos to the closing }, onto acc (newest first) *)
+and _parse_object {l:agz}{n:pos}{s:nat}{p:nat | s <= p; p <= n} .<n - p, 1>.
+  (src: !$A.borrow(byte, l, n), pos: int p, max: int n,
+   acc: json_entries_v, first: bool): $R.result(@(json_entries_v, [q:int | s <= q; q <= n] int q), int) = let
+  val p1 = skip_ws(src, pos, max)
+in
+  if p1 >= max then let
+    val () = json_entries_free(acc)
+  in $R.err(p1) end
+  else if $AR.eq_int_int(rd(src, p1, max), 125) then (* } *)
+    $R.ok(@(acc, p1 + 1))
+  else let
+    val p2 = skip_comma(src, p1, max, first)
+  in
+    if p2 >= max then let
+      val () = json_entries_free(acc)
+    in $R.err(p2) end
+    else if $AR.eq_int_int(rd(src, p2, max), 34) then let (* " for key *)
+      val @(karr, klen, kep, kclosed) = parse_string(src, p2 + 1, max)
+      val p3 = skip_ws(src, kep, max)
+    in
+      if ~kclosed then let
+        val () = $A.free<byte>(karr)
+        val () = json_entries_free(acc)
+      in $R.err(kep) end
+      else if p3 >= max then let
+        val () = $A.free<byte>(karr)
+        val () = json_entries_free(acc)
+      in $R.err(p3) end
+      else if $AR.eq_int_int(rd(src, p3, max), 58) then (* : *)
+        (case+ _parse(src, p3 + 1, max) of
+         | ~$R.ok(@(v, vep)) =>
+             _parse_object{l}{n}{s}(src, vep, max, json_entries_cons(karr, klen, v, acc), false)
+         | ~$R.err(e) => let
+             val () = $A.free<byte>(karr)
+             val () = json_entries_free(acc)
+           in $R.err(e) end)
+      else let
+        val () = $A.free<byte>(karr)
+        val () = json_entries_free(acc)
+      in $R.err(p3) end
+    end
+    else let
+      val () = json_entries_free(acc)
+    in $R.err(p2) end
+  end
+end
+
+(* A position past the buffer's size is the end of the input *)
+implement parse (src, pos, max) =
+  if pos > max then $R.err(pos)
+  else (case+ _parse(src, pos, max) of
+    | ~$R.ok(@(v, q)) => $R.ok(@(v, q))
+    | ~$R.err(e) => $R.err(e))
