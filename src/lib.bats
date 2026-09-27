@@ -103,7 +103,7 @@ fn emit_escaped {l:agz}{n:nat | n + 8192 <= $B.BUILDER_CAP}
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 114)
       in loop(b, arr, pos + 1, len, room - 2) end
       else let
-        val () = $B.put_byte(b, c)
+        val () = $B.put_byte(b, $AR.low_byte(c))
       in loop(b, arr, pos + 1, len, room - 2) end
     end
 in loop(b, arr, 0, len, 8192) end
