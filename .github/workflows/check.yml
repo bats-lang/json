@@ -46,6 +46,11 @@ jobs:
           bats lock --repository ~/repository
           bats check --repository ~/repository
 
+      - name: Unit tests
+        run: |
+          export PATH=~/bats-bin:$PATH
+          bats test --repository ~/repository
+
       - name: Dynamic tests
         run: |
           export PATH=~/bats-bin:$PATH
