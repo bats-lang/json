@@ -81,40 +81,40 @@ implement json_entries_free(ents) = _free_entries(ents)
    ============================================================ *)
 
 (* Helper: write a byte array to builder, escaping for JSON strings.
-   Each input byte produces at most 2 output bytes (escape sequences).
-   With bounded iteration via pos < len <= 4096, max output is 8192. *)
+   Each input byte produces at most 2 output bytes (escape sequences),
+   so the bytes left, 2 * (dlen - pos), bound the output: at most
+   2 * 4096 = 8192. *)
 fn emit_escaped {l:agz}{n:nat | n + 8192 <= $B.BUILDER_CAP}
     {dlen:nat | dlen <= 4096}
   (b: !$B.builder(n) >> [m:nat | n <= m; m <= n + 8192] $B.builder(m),
    arr: !$A.arr(byte, l, 4096), len: int dlen): void = let
-  fun loop {l2:agz}{pos:nat | pos <= dlen}{room:nat | room >= 2; p:nat | p + room <= $B.BUILDER_CAP} .<dlen - pos>.
-    (b: !$B.builder(p) >> [m:nat | p <= m; m <= p + room] $B.builder(m),
-     arr: !$A.arr(byte, l2, 4096), pos: int pos, len: int dlen, room: int room): void =
+  fun loop {l2:agz}{pos:nat | pos <= dlen}{p:nat | p + 2 * (dlen - pos) <= $B.BUILDER_CAP} .<dlen - pos>.
+    (b: !$B.builder(p) >> [m:nat | p <= m; m <= p + 2 * (dlen - pos)] $B.builder(m),
+     arr: !$A.arr(byte, l2, 4096), pos: int pos, len: int dlen): void =
     if pos >= len then ()
-    else if room < 4 then ()
     else let
       val c = byte2int0($A.get<byte>(arr, pos))
     in
       if $AR.eq_int_int(c, 34) then let (* " *)
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 34)
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
       else if $AR.eq_int_int(c, 92) then let (* \ *)
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 92)
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
       else if $AR.eq_int_int(c, 10) then let (* \n *)
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 110)
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
       else if $AR.eq_int_int(c, 9) then let (* \t *)
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 116)
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
       else if $AR.eq_int_int(c, 13) then let (* \r *)
         val () = $B.put_byte(b, 92) val () = $B.put_byte(b, 114)
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
       else let
         val () = $B.put_byte(b, $AR.low_byte(c))
-      in loop(b, arr, pos + 1, len, room - 2) end
+      in loop(b, arr, pos + 1, len) end
     end
-in loop(b, arr, 0, len, 8192) end
+in loop(b, arr, 0, len) end
 
 #pub fun serialize {sz:nat}{n:nat | n + sz <= $B.BUILDER_CAP}
   (v: !json(sz),
@@ -189,11 +189,10 @@ implement serialize_entries(ents, b, first) = _ser_entries(ents, b, first)
    value, array and object parsers recurse on (n - p, 0) and (n - p, 1).
    ============================================================ *)
 
-(* Byte at pos, or ~1 at or past the end of the input *)
-fn rd {l:agz}{n:pos}{p:nat}
+(* Byte at pos, a position in the input *)
+fn rd {l:agz}{n:pos}{p:nat | p < n}
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n): int =
-  if pos < max then byte2int0($A.read<byte>(src, pos))
-  else ~1
+  byte2int0($A.read<byte>(src, pos))
 
 fun skip_ws {l:agz}{n:pos}{p:nat | p <= n} .<n - p>.
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n): [q:int | p <= q; q <= n] int q =
@@ -246,21 +245,21 @@ in @(out, olen, epos, closed) end
 fun parse_int {l:agz}{n:pos}{p:nat | p <= n} .<n - p>.
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n, acc: int, neg: bool)
   : @(bool, int, [q:int | p <= q; q <= n] int q) =
-  let
-    val c = (if pos < max then rd(src, pos, max) else ~1): int
+  if pos >= max then @(true, (if neg then acc else ~acc), pos)
+  else let
+    val c = rd(src, pos, max)
   in
     if c >= 48 && c <= 57 then let
       val d = c - 48
       val lim = (if neg then 8 else 7): int
     in
       if acc < ~214748364 || (acc = ~214748364 && d > lim) then @(false, 0, pos)
-      else if pos < max then parse_int(src, pos + 1, max, acc * 10 - d, neg)
-      else @(false, 0, pos)
+      else parse_int(src, pos + 1, max, acc * 10 - d, neg)
     end
     else @(true, (if neg then acc else ~acc), pos)
   end
 
-#pub fun parse {l:agz}{n:pos}{p:nat}
+#pub fun parse {l:agz}{n:pos}{p:nat | p <= n}
   (src: !$A.borrow(byte, l, n), pos: int p, max: int n
   ): $R.result(@(json_v, [q:nat] int q), int)
 
@@ -289,7 +288,7 @@ fun reverse_entries {s,a:nat} .<s>.
   | ~json_entries_cons(k, kl, v, rest) => reverse_entries(rest, json_entries_cons(k, kl, v, acc))
 
 (* Whether src[p, p + 4) is c0 c1 c2 c3 *)
-fn at4 {l:agz}{n:pos}{p:nat}
+fn at4 {l:agz}{n:pos}{p:nat | p + 4 <= n}
   (src: !$A.borrow(byte, l, n), p: int p, max: int n, c0: int, c1: int, c2: int, c3: int): bool =
   $AR.eq_int_int(rd(src, p, max), c0) && $AR.eq_int_int(rd(src, p + 1, max), c1) &&
   $AR.eq_int_int(rd(src, p + 2, max), c2) && $AR.eq_int_int(rd(src, p + 3, max), c3)
@@ -416,25 +415,22 @@ in
   end
 end
 
-(* A position past the buffer's size is the end of the input *)
 implement parse (src, pos, max) =
-  if pos > max then $R.err(pos)
-  else (case+ _parse(src, pos, max) of
-    | ~$R.ok(@(v, q)) => $R.ok(@(v, q))
-    | ~$R.err(e) => $R.err(e))
+  case+ _parse(src, pos, max) of
+  | ~$R.ok(@(v, q)) => $R.ok(@(v, q))
+  | ~$R.err(e) => $R.err(e)
 
 $UNITTEST.run begin
 
 (* Whether a[i, k) and b[i, k) hold the same bytes *)
-fun same_from {la,lb:agz}{i:nat | i <= 524288} .<524288 - i>.
-  (a: !$A.arr(byte, la, $B.BUILDER_CAP), b: !$A.arr(byte, lb, $B.BUILDER_CAP), i: int i, k: int): bool =
+fun same_from {la,lb:agz}{k:nat | k <= $B.BUILDER_CAP}{i:nat | i <= k} .<k - i>.
+  (a: !$A.arr(byte, la, $B.BUILDER_CAP), b: !$A.arr(byte, lb, $B.BUILDER_CAP), i: int i, k: int k): bool =
   if i >= k then true
-  else if i >= 524288 then false
   else if byte2int0($A.get<byte>(a, i)) = byte2int0($A.get<byte>(b, i)) then same_from(a, b, i + 1, k)
   else false
 
-fn same_arrs {la,lb:agz}
-  (a: $A.arr(byte, la, $B.BUILDER_CAP), an: int, b: $A.arr(byte, lb, $B.BUILDER_CAP), bn: int): bool = let
+fn same_arrs {la,lb:agz}{an,bn:nat | an <= $B.BUILDER_CAP; bn <= $B.BUILDER_CAP}
+  (a: $A.arr(byte, la, $B.BUILDER_CAP), an: int an, b: $A.arr(byte, lb, $B.BUILDER_CAP), bn: int bn): bool = let
   val ok = (if an = bn then same_from(a, b, 0, an) else false): bool
   val () = $A.free<byte>(a)
   val () = $A.free<byte>(b)
