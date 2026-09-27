@@ -1,0 +1,10 @@
+[package]
+name = "limits"
+kind = "bin"
+
+[dependencies]
+"builder" = ""
+"array" = ""
+"result" = ""
+"str" = ""
+"json" = ""
