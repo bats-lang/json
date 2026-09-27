@@ -5,7 +5,9 @@
 # expressed in types (e.g. which value a comparison returns).
 #
 # If the package has an `expected` file, the binary's output must match
-# it exactly.
+# it exactly. If it has a `no-leaks` file, it runs under valgrind, which
+# must find no block definitely or indirectly lost (there is no GC: a
+# cell nothing frees is lost for good).
 #
 # usage: tests/dynamic/run.sh <repository-dir>   (bats must be on PATH)
 set -eu
@@ -27,20 +29,25 @@ done
 # where it is missing the binary runs without a limit.
 LIMIT=""
 if command -v timeout >/dev/null 2>&1; then LIMIT="timeout 300"; fi
+if ! command -v valgrind >/dev/null 2>&1; then
+  echo "error: valgrind is needed for the no-leaks tests" >&2; exit 1
+fi
 
 fail=0
 for d in "$ROOT"/tests/dynamic/*/; do
   [ -f "$d/bats.toml" ] || continue
   n=$(basename "$d"); w="$TMP/w-$n"
   cp -R "$d" "$w"
+  RUN=""
+  [ -f "$d/no-leaks" ] && RUN="valgrind -q --leak-check=full --errors-for-leak-kinds=definite,indirect --error-exitcode=1"
   # --dev: the checkout uploads as a dev version, which bats lock skips
   # without it (as the Rust bats does).
   if (cd "$w" && bats lock --dev --repository "$TMP/repo" && bats build --only debug --only native --repository "$TMP/repo") > "$TMP/$n.log" 2>&1 \
-     && (cd "$w" && $LIMIT "./dist/debug/$n") > "$TMP/$n.out" 2>&1 \
+     && (cd "$w" && $LIMIT $RUN "./dist/debug/$n") > "$TMP/$n.out" 2>&1 \
      && { [ ! -f "$d/expected" ] || diff -u "$d/expected" "$TMP/$n.out"; }; then
     echo "ok   $n"
   else
-    echo "FAIL $n"; grep -E 'error|FAIL' "$TMP/$n.log" "$TMP/$n.out" 2>/dev/null | head -10; fail=1
+    echo "FAIL $n"; grep -E 'error|FAIL|lost' "$TMP/$n.log" "$TMP/$n.out" 2>/dev/null | head -10; fail=1
   fi
 done
 exit $fail
