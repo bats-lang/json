@@ -422,3 +422,94 @@ implement parse (src, pos, max) =
   else (case+ _parse(src, pos, max) of
     | ~$R.ok(@(v, q)) => $R.ok(@(v, q))
     | ~$R.err(e) => $R.err(e))
+
+$UNITTEST.run begin
+
+(* Whether a[i, k) and b[i, k) hold the same bytes *)
+fun same_from {la,lb:agz}{i:nat | i <= 524288} .<524288 - i>.
+  (a: !$A.arr(byte, la, $B.BUILDER_CAP), b: !$A.arr(byte, lb, $B.BUILDER_CAP), i: int i, k: int): bool =
+  if i >= k then true
+  else if i >= 524288 then false
+  else if byte2int0($A.get<byte>(a, i)) = byte2int0($A.get<byte>(b, i)) then same_from(a, b, i + 1, k)
+  else false
+
+fn same_arrs {la,lb:agz}
+  (a: $A.arr(byte, la, $B.BUILDER_CAP), an: int, b: $A.arr(byte, lb, $B.BUILDER_CAP), bn: int): bool = let
+  val ok = (if an = bn then same_from(a, b, 0, an) else false): bool
+  val () = $A.free<byte>(a)
+  val () = $A.free<byte>(b)
+in ok end
+
+(* v serializes to exactly s *)
+fn serializes_to {sz:nat | sz <= 524288}{sn:nat | sn <= 256}
+  (v: json(sz), s: string sn): bool = let
+  val o = $B.create()
+  val () = serialize(v, o)
+  val () = json_free(v)
+  val @(oa, on) = $B.to_arr(o)
+  val e = $B.create()
+  val () = $B.bput(e, s)
+  val @(ea, en) = $B.to_arr(e)
+in same_arrs(oa, on, ea, en) end
+
+(* The kind of the value s parses to (0 null, 1 bool, 2 int, 3 string,
+   4 array, 5 object; ~1 when it does not parse to its end), and the
+   int or the string's length *)
+fn parse_kind {sn:pos | sn <= 256} (s: string sn): @(int, int) = let
+  val b = $B.create()
+  val () = $B.bput(b, s)
+  val @(arr, n) = $B.to_arr(b)
+  val @(f, bv) = $A.freeze<byte>(arr)
+  val r = (case+ parse(bv, 0, 524288) of
+    | ~$R.ok(@(v, ep)) => let
+        val kv = (case+ v of
+          | json_null() => @(0, 0)
+          | json_bool(_) => @(1, 0)
+          | json_int(i) => @(2, i)
+          | json_str(_, len) => @(3, len)
+          | json_arr(_) => @(4, 0)
+          | json_obj(_) => @(5, 0)): @(int, int)
+        val () = json_free(v)
+      in if ep = n then kv else @(~1, 0) end
+    | ~$R.err(_) => @(~1, 0)): @(int, int)
+  val () = $A.drop<byte>(f, bv)
+  val () = $A.free<byte>($A.thaw<byte>(f))
+in r end
+
+fn test_serialize_null (): bool = serializes_to(json_null(), "null")
+
+fn test_serialize_true (): bool = serializes_to(json_bool(true), "true")
+
+fn test_serialize_int (): bool = serializes_to(json_int(42), "42")
+
+fn test_serialize_string (): bool = let
+  val s = $A.alloc<byte>(4096)
+  val () = $A.write_byte(s, 0, 104) (* h *)
+  val () = $A.write_byte(s, 1, 105) (* i *)
+in serializes_to(json_str(s, 2), "\"hi\"") end
+
+fn test_roundtrip_null (): bool = let
+  val @(k, _) = parse_kind("null")
+in k = 0 end
+
+fn test_roundtrip_int (): bool = let
+  val @(k, v) = parse_kind("123")
+in if k = 2 then v = 123 else false end
+
+fn test_roundtrip_string (): bool = let
+  val @(k, len) = parse_kind("\"hello\"")
+in if k = 3 then len = 5 else false end
+
+fn test_roundtrip_array (): bool = let
+  val @(k, _) = parse_kind("[1,2,3]")
+in k = 4 end
+
+fn test_roundtrip_object (): bool = let
+  val @(k, _) = parse_kind("{\"a\":1,\"b\":true}")
+in k = 5 end
+
+fn test_roundtrip_nested (): bool = let
+  val @(k, _) = parse_kind("{\"x\":[1,{\"y\":null}],\"z\":false}")
+in k = 5 end
+
+end
