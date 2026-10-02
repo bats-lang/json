@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The daily relock dispatches it on its relock/<date> branch: a pull
+  # request opened with GITHUB_TOKEN starts no workflow by itself
+  workflow_dispatch:
 
 jobs:
   check:
@@ -24,11 +27,16 @@ jobs:
           mkdir -p ~/.bats
           ln -sf ~/.ats2/ATS2-Postiats-int-0.4.2 ~/.bats/ats2
 
+      # The compiler at the commit .github/bats-version pins (bats-lang/repository-prototype#269)
+      - name: Read the compiler pin
+        id: pins
+        run: echo "bats=$(tr -d '[:space:]' < .github/bats-version)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout bats compiler
         uses: actions/checkout@v4
         with:
           repository: bats-lang/bats
-          ref: main
+          ref: ${{ steps.pins.outputs.bats }}
           path: bats-src
 
       - name: Build bats from checked-in bootstrap C
@@ -42,8 +50,13 @@ jobs:
       - name: bats check
         run: |
           export PATH=~/bats-bin:$PATH
-          git clone https://github.com/bats-lang/repository-prototype.git ~/repository
-          bats lock --repository ~/repository
+          # The package repository at the commit .github/repository-version pins
+          # (bats-lang/repository-prototype#269): what the lock and the test packages resolve against
+          git init -q ~/repository
+          git -C ~/repository fetch -q --depth 1 https://github.com/bats-lang/repository-prototype.git "$(tr -d '[:space:]' < .github/repository-version)"
+          git -C ~/repository checkout -q FETCH_HEAD
+          # The committed lock (bats-lang/repository-prototype#269): never relocked here
+          test -f bats.lock || { echo "::error::bats.lock is missing: run 'bats lock --repository <dir>' and commit it"; exit 1; }
           bats check --repository ~/repository
 
       - name: Unit tests
