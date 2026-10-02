@@ -1,0 +1,24 @@
+# Daily: relock this package and move its CI pins to their newest, as a
+# pull request that runs check.yml (bats-lang/repository-prototype#269).
+# The work is the shared relock-pins.yml, called by commit.
+name: relock
+
+on:
+  schedule:
+    - cron: '25 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+
+jobs:
+  relock:
+    uses: bats-lang/repository-prototype/.github/workflows/relock-pins.yml@a4150132456b32c3c58baa830a44cc463e37498e
+    secrets: inherit
+    with:
+      workflow-pins: |
+        bats-lang/repository-prototype/.github/workflows/publish.yml
+        bats-lang/repository-prototype/.github/workflows/relock-pins.yml
