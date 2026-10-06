@@ -1,0 +1,9 @@
+[package]
+name = "grammar"
+kind = "bin"
+
+[dependencies]
+"array" = ""
+"builder" = ""
+"result" = ""
+"json" = ""

@@ -5,7 +5,8 @@
 #use str as S
 
 (* parse on whole buffers. Result code: -1 error, 0 null, 1 true,
-   2 false, 3 int, 4 string, 5 array, 6 object; plus the int value or
+   2 false, 3 int, 4 string, 5 array, 6 object, 7 number without an int;
+   plus the int value or
    string length, and the end position. Truncated inputs must be errors
    (the previous parser read past the end of the buffer on them).
    Exits 1 on any mismatch. *)
@@ -17,13 +18,14 @@ fn run {k:pos | k <= 1048576}
         val @(c, x) = (case+ v of
           | $J.json_null() => @(0, 0)
           | $J.json_bool(t) => @((if t then 1 else 2), 0)
-          | $J.json_int(i) => @(3, i)
+          | $J.json_num(_, _, $R.some(i)) => @(3, i)
+          | $J.json_num(_, _, $R.none()) => @(7, 0)
           | $J.json_str(_, n) => @(4, n)
           | $J.json_arr(_) => @(5, 0)
           | $J.json_obj(_) => @(6, 0)): @(int, int)
         val () = $J.json_free(v)
       in @(c, x, ep) end
-    | ~$R.err(_) => @(~1, 0, ~1)): @(int, int, int)
+    | ~$R.err(e) => let val _ = $J.parse_error_pos(e) in @(~1, 0, ~1) end): @(int, int, int)
   val () = $A.drop<byte>(f, b)
   val () = $A.free<byte>($A.thaw<byte>(f))
   val ok = c = code && x = extra && (code < 0 || e = endp)
