@@ -241,6 +241,19 @@ implement main0 () = let
   val u11 = report("truncated E2 82", is("\"\342\202\"", ~9, 1))
   val u12 = report("truncated at the end of input", is("\"\342\202", ~9, 1))
   val u13 = report("overlong F0 80 80 80", is("\"\360\200\200\200\"", ~9, 1))
+  val u14 = report("C3 then a letter", is("\"\303A\"", ~9, 1))
+  val u15 = report("C3 then the quote", is("\"\303\"", ~9, 1))
+  val u16 = report("C3 at the end of input", is("\"\303", ~9, 1))
+  val u17 = report("E1 then a letter", is("\"\341A\"", ~9, 1))
+  val u18 = report("EF then a letter", is("\"\357A\"", ~9, 1))
+  val u19 = report("F0 9F then a letter", is("\"\360\237A\"", ~9, 1))
+  val u20 = report("F0 9F 98 then a letter", is("\"\360\237\230A\"", ~9, 1))
+  val u21 = report("E0 A0 80 (U+0800) accepted", str_is("\"\340\240\200\"", "\340\240\200"))
+  val u22 = report("ED 9F BF (U+D7FF) accepted", str_is("\"\355\237\277\"", "\355\237\277"))
+  val u23 = report("EE 80 80 (U+E000) accepted", str_is("\"\356\200\200\"", "\356\200\200"))
+  val u24 = report("F1 80 80 80 (U+40000) accepted", str_is("\"\361\200\200\200\"", "\361\200\200\200"))
+  val u25 = report("F4 8F BF BF (U+10FFFF) accepted", str_is("\"\364\217\277\277\"", "\364\217\277\277"))
+  val u26 = report("F0 90 80 80 (U+10000) accepted", str_is("\"\360\220\200\200\"", "\360\220\200\200"))
   val c1 = report("raw NUL rejected", with_byte("\"a", 0, "\"", ~6, 2))
   val c2 = report("raw 0x1f rejected", with_byte("\"", 31, "\"", ~6, 1))
   val c3 = report("raw newline rejected", with_byte("\"ab", 10, "\"", ~6, 3))
@@ -260,6 +273,7 @@ implement main0 () = let
   val b11 = report("high then a truncated escape", is("\"\\ud83d\\u12", ~1, 11))
   val b12 = report("bad escape in a key", is("{\"\\q\":1}", ~7, 2))
   val b13 = report("unterminated string", is("\"abc", ~1, 4))
+  val b14 = report("bad hex in a key", is("{\"\\u12G4\":1}", ~8, 2))
   (* --- numbers ------------------------------------------------ *)
   val n1 = report("0", num_is("0", 0))
   val n2 = report("-0", num_is("-0", 0))
@@ -321,9 +335,9 @@ implement main0 () = let
   val s16 = report("trailing data", is("1 2", ~11, 2))
   val s17 = report("two values", is("{}{}", ~11, 2))
   val s18 = report("tru", is("tru", ~1, 3))
-  val s19 = report("trUe", is("trUe", ~2, 0))
+  val s19 = report("trUe: the U", is("trUe", ~2, 2))
   val s20 = report("nul", is("nul", ~1, 3))
-  val s21 = report("falsy", is("falsy", ~2, 0))
+  val s21 = report("falsy: the y", is("falsy", ~2, 4))
   val s22 = report("empty input is only blanks", is(" ", ~1, 1))
   val s23 = report("mismatched brackets", is("[}", ~2, 1))
   val s24 = report("duplicate keys kept", is("{\"a\":1,\"a\":2}", 6, 0))
@@ -339,8 +353,12 @@ implement main0 () = let
   val s34 = report("lone [", is("[", ~1, 1))
   val s35 = report("lone {", is("{", ~1, 1))
   val s36 = report("fals", is("fals", ~1, 4))
-  val s37 = report("nulx", is("nulx", ~2, 0))
+  val s37 = report("nulx: the x", is("nulx", ~2, 3))
   val s38 = report("parse at an offset stops after the value", parse_at("xx[1] yy", 5))
+  val s39 = report("short literal in an object: the }", is("{\"a\":n}", ~2, 6))
+  val s40 = report("short literal in an array: the ]", is("[t]", ~2, 2))
+  val s41 = report("short literal before a comma", is("[f,1]", ~2, 2))
+  val s42 = report("nuxl: the x", is("[nuxl]", ~2, 3))
   (* --- serialize ---------------------------------------------- *)
   val z1 = report("serialize escapes quote, backslash, newline", ser_is(str_of(3, 34, 92, 10), "\"\\\"\\\\\\n\""))
   val z2 = report("serialize \\b \\f \\r \\t", ser_is($J.json_arr($J.json_list_cons(str_of(2, 8, 12, 0),
@@ -350,6 +368,15 @@ implement main0 () = let
   val z5 = report("serialize UTF-8 raw", ser_is(str_of(2, 195, 169, 0), "\"\303\251\""))
   val z15 = report("serialize raw three-byte UTF-8", ser_is(str_of(3, 226, 130, 172), "\"\342\202\254\""))
   val z16 = report("serialize raw four-byte UTF-8", ser_is(str4_of(240, 159, 152, 128), "\"\360\237\230\200\""))
+  val z17 = report("serialize U+0800, U+D7FF and U+E000 raw", ser_is($J.json_arr($J.json_list_cons(str_of(3, 224, 160, 128),
+    $J.json_list_cons(str_of(3, 237, 159, 191), $J.json_list_cons(str_of(3, 238, 128, 128), $J.json_list_nil())))),
+    "[\"\340\240\200\",\"\355\237\277\",\"\356\200\200\"]"))
+  val z18 = report("serialize U+40000 and U+10FFFF raw", ser_is($J.json_arr($J.json_list_cons(str4_of(241, 128, 128, 128),
+    $J.json_list_cons(str4_of(244, 143, 191, 191), $J.json_list_nil()))),
+    "[\"\361\200\200\200\",\"\364\217\277\277\"]"))
+  val z19 = report("serialize a two-byte lead at the end as \\ufffd", ser_is(str_of(2, 97, 195, 0), "\"a\\ufffd\""))
+  val z20 = report("serialize a four-byte lead and one more at the end as \\ufffd twice", ser_is(str_of(3, 97, 240, 159), "\"a\\ufffd\\ufffd\""))
+  val z21 = report("serialize an overlong C0 80 and past U+10FFFF as \\ufffd", ser_is(str4_of(192, 128, 244, 144), "\"\\ufffd\\ufffd\\ufffd\\ufffd\""))
   val z6 = report("serialize a lone continuation byte as \\ufffd", ser_is(str_of(2, 97, 128, 0), "\"a\\ufffd\""))
   val z7 = report("serialize a truncated sequence as \\ufffd", ser_is(str_of(2, 226, 130, 0), "\"\\ufffd\\ufffd\""))
   val z8 = report("serialize an encoded surrogate as \\ufffd", ser_is(str_of(3, 237, 160, 128), "\"\\ufffd\\ufffd\\ufffd\""))
@@ -369,8 +396,9 @@ in
   if e1 && e2 && e3 && e4 && e5 && e6 && e7 && e8 && e9 && e10 && e11 && e12 && e13 && e14 && e15 &&
      e16 && e17 && e18 && l1 && l2 && l3 && l4 && l5 && l6 && l7 &&
      u1 && u2 && u3 && u4 && u5 && u6 && u7 && u8 && u9 && u10 && u11 && u12 && u13 &&
+     u14 && u15 && u16 && u17 && u18 && u19 && u20 && u21 && u22 && u23 && u24 && u25 && u26 &&
      c1 && c2 && c3 && c4 && c5 &&
-     b1 && b2 && b3 && b4 && b5 && b6 && b7 && b8 && b9 && b10 && b11 && b12 && b13 &&
+     b1 && b2 && b3 && b4 && b5 && b6 && b7 && b8 && b9 && b10 && b11 && b12 && b13 && b14 &&
      n1 && n2 && n3 && n4 && n5 && n6 && n7 && n8 && n9 && n10 && n11 && n12 && n13 && n14 &&
      n15 && n16 && n17 && n18 && n19 && n20 && n21 && n22 &&
      m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13 && m14 &&
@@ -378,7 +406,8 @@ in
      s1 && s2 && s3 && s4 && s5 && s6 && s7 && s8 && s9 && s10 && s11 && s12 && s13 && s14 &&
      s15 && s16 && s17 && s18 && s19 && s20 && s21 && s22 && s23 && s24 && s25 && s26 && s27 &&
      s28 && s29 && s30 && s31 && s32 && s33 && s34 && s35 && s36 && s37 && s38 &&
-     z1 && z2 && z3 && z4 && z5 && z6 && z7 && z8 && z9 && z10 && z11 && z12 && z13 && z14 && z15 && z16
+     s39 && s40 && s41 && s42 &&
+     z1 && z2 && z3 && z4 && z5 && z6 && z7 && z8 && z9 && z10 && z11 && z12 && z13 && z14 && z15 && z16 && z17 && z18 && z19 && z20 && z21
   then println! ("grammar: all cases pass")
   else exit_void(1)
 end

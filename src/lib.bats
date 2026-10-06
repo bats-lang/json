@@ -24,10 +24,12 @@ macdef _STRING_CAP = 1048576
 (* The deepest nesting of arrays and objects parse reads: the outermost
    array or object is level 1, and one level deeper is TooDeep. Parsing,
    freeing and serializing recurse once per level, so without a limit a
-   deep enough text overflows the stack instead of failing: a debug
-   native build uses about 800 bytes of stack per level, and a WASM
-   build has a 1 MiB stack (bats links it with stack-size=1048576). 512
-   levels keep well inside both. Other strict parsers limit it too:
+   deep enough text overflows the stack instead of failing. Measured on
+   a debug native build: about 800 bytes of stack per level (10000
+   levels overflow an 8 MiB stack). A WASM build has a 1 MiB stack
+   (bats links it with stack-size=1048576); its frames were not
+   measured, so the margin there is an estimate: 512 levels at 800 bytes
+   is 400 KiB, under half of it. Other strict parsers limit depth too:
    serde_json to 128, Go's encoding/json to 10000 (Go's stacks grow). *)
 #pub stadef DEPTH_CAP = 512
 
@@ -324,10 +326,43 @@ fn put_u00 {n:nat | n + 6 <= $B.BUILDER_CAP}
   val () = $B.put_byte(b, hex_digit(c / 16))
 in $B.put_byte(b, hex_digit(c - (c / 16) * 16)) end
 
-(* Writes a[0, dlen) escaped for a JSON string: at most 6 output bytes
-   for each input byte (\u00XX for a control byte, \ufffd for a byte
-   that does not begin UTF-8), so the bytes left, 6 * (dlen - pos),
-   bound the output *)
+(* What a JSON string writes for the bytes of arr at pos, shared by
+   serialize and serialize_rope: kind 0, the k bytes as they are (one
+   printable ASCII byte, or one well-formed UTF-8 sequence); kind 1, the
+   two-byte escape of x (\" \\ \b \f \n \r \t); kind 2, \u00XX for the
+   control byte x; kind 3, \ufffd for a byte that does not begin
+   well-formed UTF-8. Kinds 1 to 3 consume one byte and write at most 6,
+   so the output is at most 6 bytes per byte consumed. *)
+fn esc_at {l:agz}{c:pos}{dlen:nat | dlen <= c}{pos:nat | pos < dlen}
+  (arr: !$A.arr(byte, l, c), pos: int pos, len: int dlen)
+  : [k:int | 1 <= k; k <= 4; pos + k <= dlen] @(int, int, int k) = let
+  val c0 = byte2int0($A.get<byte>(arr, pos))
+in
+  if c0 < 128 then let
+    val e = short_escape(c0)
+  in
+    if e > 0 then @(1, e, 1) else if c0 < 32 then @(2, c0, 1) else @(0, c0, 1)
+  end
+  else let
+    val b1 = (if pos + 1 < len then byte2int0($A.get<byte>(arr, pos + 1)) else ~1): int
+    val b2 = (if pos + 2 < len then byte2int0($A.get<byte>(arr, pos + 2)) else ~1): int
+    val b3 = (if pos + 3 < len then byte2int0($A.get<byte>(arr, pos + 3)) else ~1): int
+    val k = utf8_len(c0, b1, b2, b3, len - pos)
+  in
+    if k > 0 then @(0, c0, k) else @(3, 0, 1)
+  end
+end
+
+(* Writes a[i, k) as it is *)
+fun put_raw {l:agz}{c:pos}{k:nat | k <= c}{i:nat | i <= k}{n:nat | n + k - i <= $B.BUILDER_CAP} .<k - i>.
+  (b: !$B.builder(n) >> $B.builder(n + k - i), a: !$A.arr(byte, l, c), i: int i, k: int k): void =
+  if i >= k then ()
+  else let
+    val () = $B.put_byte(b, $AR.low_byte(byte2int0($A.get<byte>(a, i))))
+  in put_raw(b, a, i + 1, k) end
+
+(* Writes a[0, dlen) escaped for a JSON string, as esc_at says: the
+   bytes left, 6 * (dlen - pos), bound the output *)
 fn emit_escaped {l:agz}{c:pos}{dlen:nat | dlen <= c}{n:nat | n + 6 * dlen <= $B.BUILDER_CAP}
   (b: !$B.builder(n) >> [m:nat | n <= m; m <= n + 6 * dlen] $B.builder(m),
    arr: !$A.arr(byte, l, c), len: int dlen): void = let
@@ -336,38 +371,21 @@ fn emit_escaped {l:agz}{c:pos}{dlen:nat | dlen <= c}{n:nat | n + 6 * dlen <= $B.
      arr: !$A.arr(byte, l, c), pos: int pos, len: int dlen): void =
     if pos >= len then ()
     else let
-      val c0 = byte2int0($A.get<byte>(arr, pos))
+      val @(kind, x, k) = esc_at(arr, pos, len)
     in
-      if c0 < 128 then let
-        val e = short_escape(c0)
-      in
-        if e > 0 then let
-          val () = $B.put_byte(b, 92)
-          val () = $B.put_byte(b, $AR.low_byte(e))
-        in loop(b, arr, pos + 1, len) end
-        else if c0 < 32 then let
-          val () = put_u00(b, c0)
-        in loop(b, arr, pos + 1, len) end
-        else let
-          val () = $B.put_byte(b, $AR.low_byte(c0))
-        in loop(b, arr, pos + 1, len) end
-      end
+      if kind = 0 then let
+        val () = put_raw(b, arr, pos, pos + k)
+      in loop(b, arr, pos + k, len) end
+      else if kind = 1 then let
+        val () = $B.put_byte(b, 92)
+        val () = $B.put_byte(b, $AR.low_byte(x))
+      in loop(b, arr, pos + k, len) end
+      else if kind = 2 then let
+        val () = put_u00(b, x)
+      in loop(b, arr, pos + k, len) end
       else let
-        val b1 = (if pos + 1 < len then byte2int0($A.get<byte>(arr, pos + 1)) else ~1): int
-        val b2 = (if pos + 2 < len then byte2int0($A.get<byte>(arr, pos + 2)) else ~1): int
-        val b3 = (if pos + 3 < len then byte2int0($A.get<byte>(arr, pos + 3)) else ~1): int
-        val k = utf8_len(c0, b1, b2, b3, len - pos)
-      in
-        if k = 0 then let
-          val () = $B.bput(b, "\\ufffd")
-        in loop(b, arr, pos + 1, len) end
-        else let
-          val () = $B.put_byte(b, $AR.low_byte(c0))
-          val () = (if k >= 2 then $B.put_byte(b, $AR.low_byte(b1)) else ())
-          val () = (if k >= 3 then $B.put_byte(b, $AR.low_byte(b2)) else ())
-          val () = (if k >= 4 then $B.put_byte(b, $AR.low_byte(b3)) else ())
-        in loop(b, arr, pos + k, len) end
-      end
+        val () = $B.bput(b, "\\ufffd")
+      in loop(b, arr, pos + k, len) end
     end
 in loop(b, arr, 0, len) end
 
@@ -455,52 +473,42 @@ implement serialize_entries(ents, b, first) = _ser_entries(ents, b, first)
 (* ============================================================
    Serialize: JSON value → rope, for a value of any size (a
    builder holds at most BUILDER_CAP bytes). The same text as
-   serialize.
+   serialize: what a string or a number writes is decided once, by
+   esc_at and lexeme_ok; only the writing is twice. The walk is twice
+   on purpose: serialize's carries the proof that each write fits the
+   builder (its index changes with every byte), which the rope, with
+   no index, has nothing to fill in, and a template cannot abstract
+   over a sink whose index changes.
    ============================================================ *)
 
 #pub fun serialize_rope {sz:nat} (v: !json(sz), r: !$B.rope): void
 
+(* Writes a[i, k) as it is *)
+fun rope_raw {l:agz}{c:pos}{k:nat | k <= c}{i:nat | i <= k} .<k - i>.
+  (r: !$B.rope, a: !$A.arr(byte, l, c), i: int i, k: int k): void =
+  if i >= k then ()
+  else let
+    val () = $B.rope_put(r, $AR.low_byte(byte2int0($A.get<byte>(a, i))))
+  in rope_raw(r, a, i + 1, k) end
+
+(* Writes a[0, dlen) escaped for a JSON string, as esc_at says *)
 fn rope_escaped {l:agz}{c:pos}{dlen:nat | dlen <= c}
   (r: !$B.rope, arr: !$A.arr(byte, l, c), len: int dlen): void = let
   fun loop {pos:nat | pos <= dlen} .<dlen - pos>.
     (r: !$B.rope, arr: !$A.arr(byte, l, c), pos: int pos, len: int dlen): void =
     if pos >= len then ()
     else let
-      val c0 = byte2int0($A.get<byte>(arr, pos))
-    in
-      if c0 < 128 then let
-        val e = short_escape(c0)
-      in
-        if e > 0 then let
-          val () = $B.rope_put(r, 92)
-          val () = $B.rope_put(r, $AR.low_byte(e))
-        in loop(r, arr, pos + 1, len) end
-        else if c0 < 32 then let
-          val () = $B.rope_bput(r, "\\u00")
-          val () = $B.rope_put(r, hex_digit(c0 / 16))
-          val () = $B.rope_put(r, hex_digit(c0 - (c0 / 16) * 16))
-        in loop(r, arr, pos + 1, len) end
-        else let
-          val () = $B.rope_put(r, $AR.low_byte(c0))
-        in loop(r, arr, pos + 1, len) end
-      end
-      else let
-        val b1 = (if pos + 1 < len then byte2int0($A.get<byte>(arr, pos + 1)) else ~1): int
-        val b2 = (if pos + 2 < len then byte2int0($A.get<byte>(arr, pos + 2)) else ~1): int
-        val b3 = (if pos + 3 < len then byte2int0($A.get<byte>(arr, pos + 3)) else ~1): int
-        val k = utf8_len(c0, b1, b2, b3, len - pos)
-      in
-        if k = 0 then let
-          val () = $B.rope_bput(r, "\\ufffd")
-        in loop(r, arr, pos + 1, len) end
-        else let
-          val () = $B.rope_put(r, $AR.low_byte(c0))
-          val () = (if k >= 2 then $B.rope_put(r, $AR.low_byte(b1)) else ())
-          val () = (if k >= 3 then $B.rope_put(r, $AR.low_byte(b2)) else ())
-          val () = (if k >= 4 then $B.rope_put(r, $AR.low_byte(b3)) else ())
-        in loop(r, arr, pos + k, len) end
-      end
-    end
+      val @(kind, x, k) = esc_at(arr, pos, len)
+      val () = (if kind = 0 then rope_raw(r, arr, pos, pos + k)
+                else if kind = 1 then let
+                  val () = $B.rope_put(r, 92)
+                in $B.rope_put(r, $AR.low_byte(x)) end
+                else if kind = 2 then let
+                  val () = $B.rope_bput(r, "\\u00")
+                  val () = $B.rope_put(r, hex_digit(x / 16))
+                in $B.rope_put(r, hex_digit(x - (x / 16) * 16)) end
+                else $B.rope_bput(r, "\\ufffd"))
+    in loop(r, arr, pos + k, len) end
 in loop(r, arr, 0, len) end
 
 fn rope_number {l:agz}{c:pos}{len:pos | len <= c}
@@ -936,11 +944,23 @@ fun reverse_entries {s,a:nat} .<s>.
   | ~json_entries_nil() => acc
   | ~json_entries_cons(k, kl, v, rest) => reverse_entries(rest, json_entries_cons(k, kl, v, acc))
 
-(* Whether src[p, p + 4) is c0 c1 c2 c3 *)
-fn at4 {l:agz}{n:pos}{p:nat | p + 4 <= n}
-  (src: !$A.borrow(byte, l, n), p: int p, max: int n, c0: int, c1: int, c2: int, c3: int): bool =
-  $AR.eq_int_int(rd(src, p, max), c0) && $AR.eq_int_int(rd(src, p + 1, max), c1) &&
-  $AR.eq_int_int(rd(src, p + 2, max), c2) && $AR.eq_int_int(rd(src, p + 3, max), c3)
+(* The i-th byte of the literal w: 0 null, 1 true, 2 false *)
+fn literal_byte (w: int, i: int): int =
+  if w = 0 then (if i = 0 then 110 else if i = 1 then 117 else 108)
+  else if w = 1 then (if i = 0 then 116 else if i = 1 then 114 else if i = 2 then 117 else 101)
+  else (if i = 0 then 102 else if i = 1 then 97 else if i = 2 then 108 else if i = 3 then 115 else 101)
+
+(* Matches the k bytes of the literal w at p, from its i-th on (its
+   first byte has matched): 0 and the end past it when all match; 1
+   when the input ends first (every byte there matched); 2 and the
+   offset of the first byte that does not match *)
+fun literal_match {l:agz}{n:pos}{p:nat | p < n}{k:int | k == 4 || k == 5}{i:pos | i <= k; p + i <= n} .<k - i>.
+  (src: !$A.borrow(byte, l, n), p: int p, max: int n, w: int, i: int i, k: int k)
+  : @(int, [q:int | p < q; q <= n] int q) =
+  if i >= k then @(0, p + i)
+  else if p + i >= max then @(1, p + i)
+  else if rd(src, p + i, max) = literal_byte(w, i) then literal_match(src, p, max, w, i + 1, k)
+  else @(2, p + i)
 
 (* The value at pos (after blanks), and its end, which is past pos;
    depth is how many arrays and objects enclose it *)
@@ -951,24 +971,16 @@ fun _parse {l:agz}{n:pos}{p:nat | p <= n} .<n - p, 0>.
 in
   if p1 >= max then $R.err(UnexpectedEnd(p1))
   else let val c = rd(src, p1, max) in
-    (* null *)
-    if $AR.eq_int_int(c, 110) then
-      if p1 + 4 <= max then
-        (if at4(src, p1, max, 110, 117, 108, 108) then $R.ok(@(json_null(), p1 + 4))
-         else $R.err(UnexpectedByte(p1)))
-      else $R.err(UnexpectedEnd(max))
-    (* true *)
-    else if $AR.eq_int_int(c, 116) then
-      if p1 + 4 <= max then
-        (if at4(src, p1, max, 116, 114, 117, 101) then $R.ok(@(json_bool(true), p1 + 4))
-         else $R.err(UnexpectedByte(p1)))
-      else $R.err(UnexpectedEnd(max))
-    (* false *)
-    else if $AR.eq_int_int(c, 102) then
-      if p1 + 5 <= max then
-        (if at4(src, p1 + 1, max, 97, 108, 115, 101) then $R.ok(@(json_bool(false), p1 + 5))
-         else $R.err(UnexpectedByte(p1)))
-      else $R.err(UnexpectedEnd(max))
+    (* null, true, false *)
+    if $AR.eq_int_int(c, 110) || $AR.eq_int_int(c, 116) || $AR.eq_int_int(c, 102) then let
+      val w = (if c = 110 then 0 else if c = 116 then 1 else 2): int
+      val k = (if w = 2 then 5 else 4): [k:int | k == 4 || k == 5] int k
+      val @(st, q) = literal_match(src, p1, max, w, 1, k)
+    in
+      if st = 0 then $R.ok(@((if w = 0 then json_null() else json_bool(w = 1)): json_v, q))
+      else if st = 1 then $R.err(UnexpectedEnd(max))
+      else $R.err(UnexpectedByte(q))
+    end
     (* string *)
     else if $AR.eq_int_int(c, 34) then
       (case+ parse_string(src, p1, max) of
@@ -1148,6 +1160,17 @@ in r end
 fn test_serialize_null (): bool = serializes_to(json_null(), "null")
 
 fn test_serialize_true (): bool = serializes_to(json_bool(true), "true")
+
+fn test_serialize_false (): bool = serializes_to(json_bool(false), "false")
+
+fn test_serialize_array (): bool =
+  serializes_to(json_arr(json_list_cons(json_null(), json_list_cons(json_bool(false), json_list_nil()))),
+    "[null,false]")
+
+fn test_serialize_object (): bool = let
+  val k = $A.alloc<byte>(1)
+  val () = $A.write_byte(k, 0, 97) (* a *)
+in serializes_to(json_obj(json_entries_cons(k, 1, json_arr(json_list_nil()), json_entries_nil())), "{\"a\":[]}") end
 
 fn test_serialize_int (): bool = serializes_to(json_num_of_int(42), "42")
 

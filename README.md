@@ -26,7 +26,7 @@ for a string, the parts plus 2 for an array or object.
 * **`json_str(arr, dlen)`** is the string decoded: the first `dlen`
   bytes of `arr`, which holds at least `dlen` (`parse` allocates exactly
   `dlen`, or 1 byte for the empty string). Every escape is decoded, a
-  surrogate pair (`😀`) to one code point, written as UTF-8.
+  surrogate pair (`\ud83d\ude00`) to one code point, written as UTF-8.
   A lone surrogate (`\ud800` not followed by a low one, or a lone
   `\udc00`) becomes U+FFFD, as Go's `encoding/json` and the WHATWG
   `TextEncoder` do (see the comment on `str_loop` in `src/lib.bats` for
@@ -108,7 +108,7 @@ to a `$B.rope`, for a value of any size, such as one `parse` returned
 
 Both write valid JSON for every value: in strings they escape `"` and
 `\`, write `\b \f \n \r \t` for those bytes and `\u00XX` for the other
-bytes below 0x20, keep well-formed UTF-8 as it is, and write `�`
+bytes below 0x20, keep well-formed UTF-8 as it is, and write `\ufffd`
 for each byte that does not begin well-formed UTF-8 (a string built by
 hand may hold any bytes). A number is written as its lexeme, or as
 `null` when the lexeme is not a JSON number (as `JSON.stringify` writes
@@ -147,7 +147,7 @@ total is in the type, then copied into an array of exactly that size.
   surrogates, raw UTF-8 (valid and not), control bytes, every number
   form the grammar allows and the ones it does not, structure (commas,
   colons, trailing data), each `parse_error` with its offset, and
-  serialization (escaping, `�`, `null` for a bad lexeme).
+  serialization (escaping, `\ufffd`, `null` for a bad lexeme).
 * `tests/dynamic/caps`: strings and keys past 4096 bytes, and strings
   just under, at and just over the 1 MiB cap (also when the last
   escape, raw UTF-8 sequence or surrogate pair crosses it); number
