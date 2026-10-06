@@ -239,11 +239,11 @@ implement main0 () = let
   val u9 = report("F5", is("\"\365\200\200\200\"", ~9, 1))
   val u10 = report("FF", with_byte("\"", 255, "\"", ~9, 1))
   val u11 = report("truncated E2 82", is("\"\342\202\"", ~9, 1))
-  val u12 = report("truncated at the end of input", is("\"\342\202", ~9, 1))
+  val u12 = report("E2 82, then the input ends: UnexpectedEnd", is("\"\342\202", ~1, 3))
   val u13 = report("overlong F0 80 80 80", is("\"\360\200\200\200\"", ~9, 1))
   val u14 = report("C3 then a letter", is("\"\303A\"", ~9, 1))
   val u15 = report("C3 then the quote", is("\"\303\"", ~9, 1))
-  val u16 = report("C3 at the end of input", is("\"\303", ~9, 1))
+  val u16 = report("C3, then the input ends: UnexpectedEnd", is("\"\303", ~1, 2))
   val u17 = report("E1 then a letter", is("\"\341A\"", ~9, 1))
   val u18 = report("EF then a letter", is("\"\357A\"", ~9, 1))
   val u19 = report("F0 9F then a letter", is("\"\360\237A\"", ~9, 1))
@@ -253,6 +253,11 @@ implement main0 () = let
   val u23 = report("EE 80 80 (U+E000) accepted", str_is("\"\356\200\200\"", "\356\200\200"))
   val u24 = report("F1 80 80 80 (U+40000) accepted", str_is("\"\361\200\200\200\"", "\361\200\200\200"))
   val u25 = report("F4 8F BF BF (U+10FFFF) accepted", str_is("\"\364\217\277\277\"", "\364\217\277\277"))
+  val u27 = report("E0 80, then the input ends: InvalidUtf8", is("\"\340\200", ~9, 1))
+  val u28 = report("F0 9F 98, then the input ends: UnexpectedEnd", is("\"\360\237\230", ~1, 4))
+  val u29 = report("F0 9F 41, then the input ends: InvalidUtf8", is("\"\360\237A", ~9, 1))
+  val u30 = report("F1 then a letter", is("\"\361AAA\"", ~9, 1))
+  val u31 = report("bad UTF-8 in a key", is("{\"\303A\":1}", ~9, 2))
   val u26 = report("F0 90 80 80 (U+10000) accepted", str_is("\"\360\220\200\200\"", "\360\220\200\200"))
   val c1 = report("raw NUL rejected", with_byte("\"a", 0, "\"", ~6, 2))
   val c2 = report("raw 0x1f rejected", with_byte("\"", 31, "\"", ~6, 1))
@@ -300,14 +305,14 @@ implement main0 () = let
   val m1 = report("01 leading zero", is("01", ~3, 0))
   val m2 = report("-01", is("-01", ~3, 0))
   val m3 = report("00", is("00", ~3, 0))
-  val m4 = report("lone -", is("-", ~3, 0))
+  val m4 = report("lone -, then the input ends", is("-", ~1, 1))
   val m5 = report("- then a space", is("- 1", ~3, 0))
   val m6 = report(".5", is(".5", ~2, 0))
-  val m7 = report("1.", is("1.", ~3, 0))
+  val m7 = report("1., then the input ends", is("1.", ~1, 2))
   val m8 = report("1.e5", is("1.e5", ~3, 0))
   val m9 = report("+1", is("+1", ~2, 0))
-  val m10 = report("1e", is("1e", ~3, 0))
-  val m11 = report("1e+", is("1e+", ~3, 0))
+  val m10 = report("1e, then the input ends", is("1e", ~1, 2))
+  val m11 = report("1e+, then the input ends", is("1e+", ~1, 3))
   val m12 = report("NaN", is("NaN", ~2, 0))
   val m13 = report("Infinity", is("Infinity", ~2, 0))
   val m14 = report("-Infinity", is("-Infinity", ~3, 0))
@@ -315,6 +320,11 @@ implement main0 () = let
   val m16 = report("1.5.3", is("1.5.3", ~11, 3))
   val m17 = report("leading zero in an array", is("[01]", ~3, 1))
   val m18 = report("-.5", is("-.5", ~3, 0))
+  val m20 = report("lone - in an array", is("[-]", ~3, 1))
+  val m21 = report("1. in an array", is("[1.]", ~3, 1))
+  val m22 = report("1e before a comma", is("[1e,2]", ~3, 1))
+  val m23 = report("1e+ in an array", is("[1e+]", ~3, 1))
+  val m24 = report("- then a space", is("[- 1]", ~3, 1))
   val m19 = report("1e5.0", is("1e5.0", ~11, 3))
   (* --- structure ---------------------------------------------- *)
   val s1 = report("empty array", is("[]", 5, 0))
@@ -396,13 +406,13 @@ in
   if e1 && e2 && e3 && e4 && e5 && e6 && e7 && e8 && e9 && e10 && e11 && e12 && e13 && e14 && e15 &&
      e16 && e17 && e18 && l1 && l2 && l3 && l4 && l5 && l6 && l7 &&
      u1 && u2 && u3 && u4 && u5 && u6 && u7 && u8 && u9 && u10 && u11 && u12 && u13 &&
-     u14 && u15 && u16 && u17 && u18 && u19 && u20 && u21 && u22 && u23 && u24 && u25 && u26 &&
+     u14 && u15 && u16 && u17 && u18 && u19 && u20 && u21 && u22 && u23 && u24 && u25 && u26 && u27 && u28 && u29 && u30 && u31 &&
      c1 && c2 && c3 && c4 && c5 &&
      b1 && b2 && b3 && b4 && b5 && b6 && b7 && b8 && b9 && b10 && b11 && b12 && b13 && b14 &&
      n1 && n2 && n3 && n4 && n5 && n6 && n7 && n8 && n9 && n10 && n11 && n12 && n13 && n14 &&
      n15 && n16 && n17 && n18 && n19 && n20 && n21 && n22 &&
      m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13 && m14 &&
-     m15 && m16 && m17 && m18 && m19 &&
+     m15 && m16 && m17 && m18 && m19 && m20 && m21 && m22 && m23 && m24 &&
      s1 && s2 && s3 && s4 && s5 && s6 && s7 && s8 && s9 && s10 && s11 && s12 && s13 && s14 &&
      s15 && s16 && s17 && s18 && s19 && s20 && s21 && s22 && s23 && s24 && s25 && s26 && s27 &&
      s28 && s29 && s30 && s31 && s32 && s33 && s34 && s35 && s36 && s37 && s38 &&

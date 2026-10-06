@@ -74,15 +74,15 @@ which returns the offset).
 
 | Constructor | What failed | Offset |
 |---|---|---|
-| `UnexpectedEnd` | the input ended inside a value | the end |
+| `UnexpectedEnd` | the input ended inside a value: a literal, string, escape, UTF-8 sequence, number, array or object begun and not finished (`[1`, `tr`, `"ab`, `1.`) | the end |
 | `UnexpectedByte` | a byte that cannot come here (`+1`, `.5`, `NaN`, `[1 2]`, `[1,]`, `{a:1}`) | the byte |
-| `BadNumber` | a number the grammar does not allow: leading zero (`01`), lone `-`, `1.`, `1e`, `-Infinity` | the number's start |
+| `BadNumber` | a number the grammar does not allow, followed by something else: leading zero (`01`), lone `-` (`- 1`), `1.]`, `1e,`, `-Infinity` | the number's start |
 | `NumberTooLong` | a number lexeme over `STRING_CAP` bytes | the number's start |
 | `StringTooLong` | a string over `STRING_CAP` bytes decoded | its opening quote |
 | `ControlInString` | a raw byte below 0x20 in a string | the byte |
 | `BadEscape` | `\` followed by anything but `"\/bfnrtu` | the backslash |
 | `BadHex` | `\u` not followed by four hex digits | the backslash |
-| `InvalidUtf8` | a byte in a string that does not begin well-formed UTF-8 | the byte |
+| `InvalidUtf8` | a byte in a string that does not begin well-formed UTF-8 (a sequence the input cuts off, right so far, is `UnexpectedEnd`) | the byte |
 | `TooDeep` | an array or object nested past `DEPTH_CAP` | its bracket |
 | `TrailingData` | `parse_text` only: more than whitespace after the value | the first such byte |
 

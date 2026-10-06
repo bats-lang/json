@@ -75,11 +75,15 @@ and json_entries(int) =
 #pub vtypedef json_entries_v = [sz:nat] json_entries(sz)
 
 (* Why parse failed, and where: a byte offset in the input.
-   UnexpectedEnd     the input ended inside a value (at its end)
+   UnexpectedEnd     the input ended inside a value (at its end): a
+                     literal, string, escape, UTF-8 sequence, number,
+                     array or object begun and not finished
    UnexpectedByte    a byte that cannot come here (where it is)
    BadNumber         a number JSON's grammar does not allow: a leading
                      zero, a lone '-', no digit after '.' or the
-                     exponent (where the number starts)
+                     exponent, when something else follows (where the
+                     number starts); one the input cuts off is
+                     UnexpectedEnd
    NumberTooLong     a number lexeme longer than STRING_CAP (where it
                      starts)
    StringTooLong     a string longer than STRING_CAP bytes decoded
@@ -174,30 +178,50 @@ implement json_entries_free(ents) = _free_entries(ents)
 
 fn is_cont (b: int): bool = b >= 128 && b < 192
 
-(* How many bytes the well-formed UTF-8 sequence starting with b0 b1 b2
-   b3 has (Unicode 15, table 3-7: no overlong form, no surrogate, nothing
-   past U+10FFFF), when avail bytes are there; 0 when there is none *)
-fn utf8_len {a:nat} (b0: int, b1: int, b2: int, b3: int, avail: int a)
-  : [k:nat | k <= 4; k <= a] int k =
-  if b0 < 0 then 0
-  else if b0 < 128 then (if avail >= 1 then 1 else 0)
-  else if b0 >= 194 && b0 <= 223 then
-    (if avail >= 2 then (if is_cont(b1) then 2 else 0) else 0)
-  else if b0 >= 224 && b0 <= 239 then let
-    val ok1 = (if b0 = 224 then b1 >= 160 && b1 < 192
-               else if b0 = 237 then b1 >= 128 && b1 < 160
-               else is_cont(b1)): bool
-  in
-    if avail >= 3 then (if ok1 && is_cont(b2) then 3 else 0) else 0
-  end
-  else if b0 >= 240 && b0 <= 244 then let
-    val ok1 = (if b0 = 240 then b1 >= 144 && b1 < 192
-               else if b0 = 244 then b1 >= 128 && b1 < 144
-               else is_cont(b1)): bool
-  in
-    if avail >= 4 then (if ok1 && is_cont(b2) && is_cont(b3) then 4 else 0) else 0
-  end
+(* UTF-8 (Unicode 15, table 3-7: no overlong form, no surrogate,
+   nothing past U+10FFFF), for a byte b0 >= 0x80: how many bytes the
+   sequence it leads has, 0 when b0 cannot lead one *)
+fn utf8_need (b0: int): int =
+  if b0 >= 194 && b0 <= 223 then 2
+  else if b0 >= 224 && b0 <= 239 then 3
+  else if b0 >= 240 && b0 <= 244 then 4
   else 0
+
+(* Whether b1 may follow the lead b0: E0, ED, F0 and F4 narrow the
+   range, so that no overlong form, surrogate or code point past
+   U+10FFFF is well-formed *)
+fn utf8_second (b0: int, b1: int): bool =
+  if b0 = 224 then b1 >= 160 && b1 < 192
+  else if b0 = 237 then b1 >= 128 && b1 < 160
+  else if b0 = 240 then b1 >= 144 && b1 < 192
+  else if b0 = 244 then b1 >= 128 && b1 < 144
+  else is_cont(b1)
+
+(* How many bytes the well-formed sequence b0 b1 b2 b3 (b0 >= 0x80) has
+   when avail bytes are there; 0 when there is none *)
+fn utf8_len {a:nat} (b0: int, b1: int, b2: int, b3: int, avail: int a)
+  : [k:nat | k <= 4; k <= a] int k = let
+  val need = utf8_need(b0)
+in
+  if need = 2 then
+    (if avail >= 2 then (if is_cont(b1) then 2 else 0) else 0)
+  else if need = 3 then
+    (if avail >= 3 then (if utf8_second(b0, b1) && is_cont(b2) then 3 else 0) else 0)
+  else if need = 4 then
+    (if avail >= 4 then
+       (if utf8_second(b0, b1) && is_cont(b2) && is_cont(b3) then 4 else 0)
+     else 0)
+  else 0
+end
+
+(* Whether the avail bytes b0 b1 b2, fewer than b0's sequence needs,
+   begin a well-formed one: the input ended inside a sequence that was
+   right so far *)
+fn utf8_prefix (b0: int, b1: int, b2: int, avail: int): bool =
+  if utf8_need(b0) <= avail then false
+  else if avail >= 2 && ~utf8_second(b0, b1) then false
+  else if avail >= 3 && ~is_cont(b2) then false
+  else utf8_need(b0) > 0
 
 (* The letter of the two-byte escape for c, or 0 when it has none *)
 fn short_escape (c: int): int =
@@ -392,17 +416,8 @@ in loop(b, arr, 0, len) end
 (* Writes the lexeme a[0, len), or null when it is not a JSON number *)
 fn emit_number {l:agz}{c:pos}{len:pos | len <= c}{n:nat | n + len + 4 <= $B.BUILDER_CAP}
   (b: !$B.builder(n) >> [m:nat | n <= m; m <= n + len + 4] $B.builder(m),
-   a: !$A.arr(byte, l, c), len: int len): void = let
-  fun loop {i:nat | i <= len}{p:nat | p + len - i <= $B.BUILDER_CAP} .<len - i>.
-    (b: !$B.builder(p) >> $B.builder(p + len - i),
-     a: !$A.arr(byte, l, c), i: int i, len: int len): void =
-    if i >= len then ()
-    else let
-      val () = $B.put_byte(b, $AR.low_byte(byte2int0($A.get<byte>(a, i))))
-    in loop(b, a, i + 1, len) end
-in
-  if lexeme_ok(a, len) then loop(b, a, 0, len) else $B.bput(b, "null")
-end
+   a: !$A.arr(byte, l, c), len: int len): void =
+  if lexeme_ok(a, len) then put_raw(b, a, 0, len) else $B.bput(b, "null")
 
 #pub fun serialize {sz:nat}{n:nat | n + sz <= $B.BUILDER_CAP}
   (v: !json(sz),
@@ -483,6 +498,12 @@ implement serialize_entries(ents, b, first) = _ser_entries(ents, b, first)
 
 #pub fun serialize_rope {sz:nat} (v: !json(sz), r: !$B.rope): void
 
+(* Writes \u00XX for c < 256 *)
+fn rope_u00 (r: !$B.rope, c: int): void = let
+  val () = $B.rope_bput(r, "\\u00")
+  val () = $B.rope_put(r, hex_digit(c / 16))
+in $B.rope_put(r, hex_digit(c - (c / 16) * 16)) end
+
 (* Writes a[i, k) as it is *)
 fun rope_raw {l:agz}{c:pos}{k:nat | k <= c}{i:nat | i <= k} .<k - i>.
   (r: !$B.rope, a: !$A.arr(byte, l, c), i: int i, k: int k): void =
@@ -503,25 +524,14 @@ fn rope_escaped {l:agz}{c:pos}{dlen:nat | dlen <= c}
                 else if kind = 1 then let
                   val () = $B.rope_put(r, 92)
                 in $B.rope_put(r, $AR.low_byte(x)) end
-                else if kind = 2 then let
-                  val () = $B.rope_bput(r, "\\u00")
-                  val () = $B.rope_put(r, hex_digit(x / 16))
-                in $B.rope_put(r, hex_digit(x - (x / 16) * 16)) end
+                else if kind = 2 then rope_u00(r, x)
                 else $B.rope_bput(r, "\\ufffd"))
     in loop(r, arr, pos + k, len) end
 in loop(r, arr, 0, len) end
 
 fn rope_number {l:agz}{c:pos}{len:pos | len <= c}
-  (r: !$B.rope, a: !$A.arr(byte, l, c), len: int len): void = let
-  fun loop {i:nat | i <= len} .<len - i>.
-    (r: !$B.rope, a: !$A.arr(byte, l, c), i: int i, len: int len): void =
-    if i >= len then ()
-    else let
-      val () = $B.rope_put(r, $AR.low_byte(byte2int0($A.get<byte>(a, i))))
-    in loop(r, a, i + 1, len) end
-in
-  if lexeme_ok(a, len) then loop(r, a, 0, len) else $B.rope_bput(r, "null")
-end
+  (r: !$B.rope, a: !$A.arr(byte, l, c), len: int len): void =
+  if lexeme_ok(a, len) then rope_raw(r, a, 0, len) else $B.rope_bput(r, "null")
 
 fun _rser {sz:nat} .<sz, 0>. (v: !json(sz), r: !$B.rope): void =
   case+ v of
@@ -858,12 +868,17 @@ fun str_loop {l:agz}{n:pos}{o:nat}{p:nat | o < p; p <= n}{s:nat | s <= STRING_CA
          else str_loop(src, max, o, pos + 1, sbuf_byte(sb, $A.read<byte>(src, pos)))
        end)
     else let
-      val k = utf8_len(c, rd_or(src, pos + 1, max), rd_or(src, pos + 2, max),
-                       rd_or(src, pos + 3, max), max - pos)
+      val b1 = rd_or(src, pos + 1, max)
+      val b2 = rd_or(src, pos + 2, max)
+      val k = utf8_len(c, b1, b2, rd_or(src, pos + 3, max), max - pos)
     in
       if k = 0 then let
         val () = sbuf_free(sb)
-      in $R.err(InvalidUtf8(pos)) end
+      in
+        (* A sequence the input cuts off, right so far, ended early *)
+        if utf8_prefix(c, b1, b2, max - pos) then $R.err(UnexpectedEnd(max))
+        else $R.err(InvalidUtf8(pos))
+      end
       else if sbuf_size(sb) + k > _STRING_CAP then let
         val () = sbuf_free(sb)
       in $R.err(StringTooLong(o)) end
@@ -913,7 +928,10 @@ fn parse_number {l:agz}{n:pos}{s0:nat}{p:nat | s0 <= p; p < n}
   val @(s, e) = num_scan(src, p + 1, max, num_step(0, rd(src, p, max)))
   val len = e - p
 in
-  if s < 0 || ~num_accepts(s) then $R.err(BadNumber(p))
+  if s < 0 then $R.err(BadNumber(p))
+  else if ~num_accepts(s) then
+    (* Cut off by the end of the input, right so far: it ended early *)
+    (if e >= max then $R.err(UnexpectedEnd(max)) else $R.err(BadNumber(p)))
   else if len > _STRING_CAP then $R.err(NumberTooLong(p))
   else let
     val a = $A.alloc<byte>(len)
