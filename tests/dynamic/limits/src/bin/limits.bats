@@ -7,12 +7,14 @@
 (* What the fuel-bounded parser got wrong or refused: an array of 1501
    elements (the old parser gave up after 1000), 300 levels of nesting,
    the int bounds (the old parser overflowed silently past them, which
-   is undefined), and serialization of each kind of value, checked
-   against its text and parsed back.
+   is undefined; a number past them now parses, with no int), and
+   serialization of each kind of value, checked against its text and
+   parsed back.
    One line per check; exits 1 on any failure. *)
 
-(* The result code of parsing b[0, n): -1 error, else 5 array, 3 int;
-   the int's value; and the end *)
+(* The result code of parsing b[0, n): -1 error, else 5 array, 3 a
+   number with an int, 4 a number without one; the int's value; and the
+   end *)
 fn parse_buf {n:pos | n <= $B.BUILDER_CAP}
   (b: $B.builder(n)): @(int, int, int) = let
   val @(arr, n) = $B.to_arr(b)
@@ -21,11 +23,12 @@ fn parse_buf {n:pos | n <= $B.BUILDER_CAP}
     | ~$R.ok(@(v, ep)) => let
         val cx = (case+ v of
           | $J.json_arr(_) => @(5, 0)
-          | $J.json_int(i) => @(3, i)
+          | $J.json_num(_, _, $R.some(i)) => @(3, i)
+          | $J.json_num(_, _, $R.none()) => @(4, 0)
           | _ => @(9, 0)): @(int, int)
         val () = $J.json_free(v)
       in @(cx.0, cx.1, ep) end
-    | ~$R.err(_) => @(~1, 0, ~1)): @(int, int, int)
+    | ~$R.err(e) => let val _ = $J.parse_error_pos(e) in @(~1, 0, ~1) end): @(int, int, int)
   val () = $A.drop<byte>(f, bv)
   val () = $A.free<byte>($A.thaw<byte>(f))
 in r end
@@ -68,7 +71,7 @@ fn out_is {la,lb:agz}{on:nat}
   val @(f, bv) = $A.freeze<byte>(oa)
   val back = (case+ $J.parse(bv, 0, 524288) of
     | ~$R.ok(@(w, ep)) => let val () = $J.json_free(w) in ep = on end
-    | ~$R.err(_) => false): bool
+    | ~$R.err(e) => let val _ = $J.parse_error_pos(e) in false end): bool
   val () = $A.drop<byte>(f, bv)
   val () = $A.free<byte>($A.thaw<byte>(f))
 in eq && back end
@@ -85,10 +88,10 @@ fn ser_is {sz:nat | sz <= 524288}{sn:pos | sn <= 256}
   val @(ea, en) = $B.to_arr(e)
 in out_is(oa, on, ea, en) end
 
-(* A 4096-byte string buffer holding a, b, c *)
+(* A 3-byte string buffer holding a, b, c *)
 fn str3 {a,b,c:nat | a < 256; b < 256; c < 256}
-  (a: int a, b: int b, c: int c): [l:agz] $A.arr(byte, l, 4096) = let
-  val arr = $A.alloc<byte>(4096)
+  (a: int a, b: int b, c: int c): [l:agz] $A.arr(byte, l, 3) = let
+  val arr = $A.alloc<byte>(3)
   val () = $A.write_byte(arr, 0, a)
   val () = $A.write_byte(arr, 1, b)
   val () = $A.write_byte(arr, 2, c)
@@ -111,18 +114,18 @@ implement main0 () = let
   val @(c4, v4, _) = num("-2147483648")
   val r4 = report("int_min", c4 = 3 && v4 = ~2147483647 - 1)
   val @(c5, _, _) = num("2147483648")
-  val r5 = report("int_max_plus_one_rejected", c5 = ~1)
+  val r5 = report("int_max_plus_one_has_no_int", c5 = 4)
   val @(c6, _, _) = num("-99999999999999999999")
-  val r6 = report("long_negative_rejected", c6 = ~1)
+  val r6 = report("long_negative_has_no_int", c6 = 4)
   val r7 = report("serialize_null", ser_is($J.json_null(), "null"))
   val r8 = report("serialize_bools", ser_is($J.json_arr($J.json_list_cons($J.json_bool(true),
     $J.json_list_cons($J.json_bool(false), $J.json_list_nil()))), "[true,false]"))
-  val r9 = report("serialize_ints", ser_is($J.json_arr($J.json_list_cons($J.json_int(0),
-    $J.json_list_cons($J.json_int(~7), $J.json_list_cons($J.json_int(42), $J.json_list_nil())))),
+  val r9 = report("serialize_ints", ser_is($J.json_arr($J.json_list_cons($J.json_num_of_int(0),
+    $J.json_list_cons($J.json_num_of_int(~7), $J.json_list_cons($J.json_num_of_int(42), $J.json_list_nil())))),
     "[0,-7,42]"))
   val r10 = report("serialize_string", ser_is($J.json_str(str3(97, 10, 98), 3), "\"a\\nb\""))
   val r11 = report("serialize_nested", ser_is($J.json_obj($J.json_entries_cons(str3(120, 0, 0), 1,
-    $J.json_arr($J.json_list_cons($J.json_int(1), $J.json_list_cons(
+    $J.json_arr($J.json_list_cons($J.json_num_of_int(1), $J.json_list_cons(
       $J.json_obj($J.json_entries_cons(str3(121, 0, 0), 1, $J.json_null(), $J.json_entries_nil())),
       $J.json_list_nil()))),
     $J.json_entries_cons(str3(122, 0, 0), 1, $J.json_bool(false), $J.json_entries_nil()))),

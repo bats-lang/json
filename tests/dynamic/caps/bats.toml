@@ -1,0 +1,9 @@
+[package]
+name = "caps"
+kind = "bin"
+
+[dependencies]
+"array" = ""
+"builder" = ""
+"result" = ""
+"json" = ""
