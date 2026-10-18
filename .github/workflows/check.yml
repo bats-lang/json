@@ -11,61 +11,36 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # ubuntu-24.04 is the image the runner-images README names as the default today; pinned so it cannot move
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install ATS2
-        run: |
-          curl -sL "https://raw.githubusercontent.com/ats-lang/ats-lang.github.io/master/FROZEN000/ATS-Postiats/ATS2-Postiats-int-0.4.2.tgz" -o /tmp/ats2.tgz
-          mkdir -p ~/.ats2
-          tar -xzf /tmp/ats2.tgz -C ~/.ats2
-          cd ~/.ats2/ATS2-Postiats-int-0.4.2
-          make -j$(nproc) -C src/CBOOT patsopt
-          mkdir -p bin
-          cp src/CBOOT/patsopt bin/patsopt
-          mkdir -p ~/.bats
-          ln -sf ~/.ats2/ATS2-Postiats-int-0.4.2 ~/.bats/ats2
-
-      # The compiler at the commit .github/bats-version pins (bats-lang/repository-prototype#269)
-      - name: Read the compiler pin
-        id: pins
-        run: echo "bats=$(tr -d '[:space:]' < .github/bats-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout bats compiler
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: bats-lang/bats
-          ref: ${{ steps.pins.outputs.bats }}
-          path: bats-src
+          # the setup action names a pull request's head, the merge's second parent (bats#283)
+          fetch-depth: 2
 
-      - name: Build bats from checked-in bootstrap C
-        run: |
-          cp -R bats-src/bootstrap/c ~/bats-c
-          make -j$(nproc) -C ~/bats-c PATSHOME=$HOME/.ats2/ATS2-Postiats-int-0.4.2 debug/bats
-          mkdir -p ~/bats-bin
-          cp ~/bats-c/debug/bats ~/bats-bin/bats
-          rm -rf bats-src
+      # What every bats repository's job runs first (bats-lang/bats#287, #274), called by commit:
+      # libgmp-dev and lld, the compiler built from bootstrap/c at .github/bats-version, the
+      # GMP build of ATS2 (bats ats2 install, the pin and its SHA-256 are bats's), the package
+      # repository at .github/repository-version (cloned to ~/repository), the commit the version
+      # names, and the patsopt caps. bats.lock is required and read by the action.
+      - name: Set up bats
+        id: bats
+        uses: bats-lang/bats/.github/actions/setup@8e978dfe7fac83726730361329c91b0e829beaad # bats 8e978df (#287)
 
       - name: bats check
-        run: |
-          export PATH=~/bats-bin:$PATH
-          # The package repository at the commit .github/repository-version pins
-          # (bats-lang/repository-prototype#269): what the lock and the test packages resolve against
-          git init -q ~/repository
-          git -C ~/repository fetch -q --depth 1 https://github.com/bats-lang/repository-prototype.git "$(tr -d '[:space:]' < .github/repository-version)"
-          git -C ~/repository checkout -q FETCH_HEAD
-          # The committed lock (bats-lang/repository-prototype#269): never relocked here
-          test -f bats.lock || { echo "::error::bats.lock is missing: run 'bats lock --repository <dir>' and commit it"; exit 1; }
-          bats check --repository ~/repository
+        env:
+          REPOSITORY: ${{ steps.bats.outputs.repository }}
+        run: bats check --repository "$REPOSITORY"
 
       - name: Unit tests
-        run: |
-          export PATH=~/bats-bin:$PATH
-          bats test --repository ~/repository
+        env:
+          REPOSITORY: ${{ steps.bats.outputs.repository }}
+        run: bats test --repository "$REPOSITORY"
 
       - name: Dynamic tests
+        env:
+          REPOSITORY: ${{ steps.bats.outputs.repository }}
         run: |
           sudo apt-get install -y valgrind
-          export PATH=~/bats-bin:$PATH
-          tests/dynamic/run.sh ~/repository
+          tests/dynamic/run.sh "$REPOSITORY"
