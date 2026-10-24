@@ -11,36 +11,4 @@ on:
 
 jobs:
   check:
-    # ubuntu-24.04 is the image the runner-images README names as the default today; pinned so it cannot move
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # the setup action names a pull request's head, the merge's second parent (bats#283)
-          fetch-depth: 2
-
-      # What every bats repository's job runs first (bats-lang/bats#287, #274), called by commit:
-      # libgmp-dev and lld, the compiler built from bootstrap/c at .github/bats-version, the
-      # GMP build of ATS2 (bats ats2 install, the pin and its SHA-256 are bats's), the package
-      # repository at .github/repository-version (cloned to ~/repository), the commit the version
-      # names, and the patsopt caps. bats.lock is required and read by the action.
-      - name: Set up bats
-        id: bats
-        uses: bats-lang/bats/.github/actions/setup@8e978dfe7fac83726730361329c91b0e829beaad # bats 8e978df (#287)
-
-      - name: bats check
-        env:
-          REPOSITORY: ${{ steps.bats.outputs.repository }}
-        run: bats check --repository "$REPOSITORY"
-
-      - name: Unit tests
-        env:
-          REPOSITORY: ${{ steps.bats.outputs.repository }}
-        run: bats test --repository "$REPOSITORY"
-
-      - name: Dynamic tests
-        env:
-          REPOSITORY: ${{ steps.bats.outputs.repository }}
-        run: |
-          sudo apt-get install -y valgrind
-          tests/dynamic/run.sh "$REPOSITORY"
+    uses: bats-lang/repository-prototype/.github/workflows/package-check.yml@61817b0516ad77524ce349b8c2ab3ba978436729 # repository-prototype main 61817b0
