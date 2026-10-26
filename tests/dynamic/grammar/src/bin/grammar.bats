@@ -121,28 +121,28 @@ in c = code && v = want end
 
 (* Whether cs is one chunk holding exactly e[0, en) *)
 fn one_chunk_is {k:nat}{le:agz}{en:nat | en <= $B.BUILDER_CAP}
-  (cs: !$B.rope_list(k), e: !$A.arr(byte, le, $B.BUILDER_CAP), en: int en): bool =
+  (cs: !$B.rope_sized_list(k), e: !$A.arr(byte, le, $B.BUILDER_CAP), en: int en): bool =
   case+ cs of
-  | $B.rope_cons(a, an, $B.rope_nil()) => bytes_are(a, an, e, en)
+  | $B.rope_sized_cons(a, an, $B.rope_sized_nil()) => bytes_are(a, an, e, en)
   | _ => false
 
 (* v serializes to exactly s, and that parses back *)
 fn ser_is {sz:nat | sz <= 4096}{sn:pos | sn <= 256} (v: $J.json(sz), s: string sn): bool = let
   val o = $B.create()
   val () = $J.serialize(v, o)
-  val r = $B.rope_create()
-  val () = $J.serialize_rope(v, r)
+  val r = $B.sized_rope_create()
+  val () = $J.serialize_sized_rope(v, r)
   val () = $J.json_free(v)
-  val () = $B.rope_append(r, o)
+  val () = $B.sized_rope_append(r, o)
   (* The rope now holds the rope's text, then the builder's: the same
      text twice *)
   val e = $B.create()
   val () = $B.bput(e, s)
   val () = $B.bput(e, s)
   val @(ea, en) = $B.to_arr(e)
-  val cs = $B.rope_chunks(r)
+  val cs = $B.sized_rope_chunks(r)
   val ok = one_chunk_is(cs, ea, en)
-  val () = $B.rope_list_free(cs)
+  val () = $B.rope_sized_list_free(cs)
   val () = $A.free<byte>(ea)
   val @(c, _, _) = outcome(lit(s), lit0(""))
 in ok && c >= 0 end

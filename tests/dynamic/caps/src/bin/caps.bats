@@ -9,7 +9,7 @@
    (1048576 bytes decoded), also when an escape makes the text longer
    than the string; number lexemes at and over the same cap; nesting at and
    over DEPTH_CAP (512). Inputs this big do not fit in one $A.alloc, so they
-   are pieces of an arena. Then round trips through serialize_rope at
+   are pieces of an arena. Then round trips through serialize_sized_rope at
    the cap, and through serialize for a string past 4096 bytes.
    One line per check; exits 1 on any failure. *)
 
@@ -237,19 +237,19 @@ fn parse_case {n:pos | n <= 268435456} (n: int n, t: int, k: int, v: int, w: int
   | ~$A.arena_none() => @(~97, 0, false)
 
 (* The total length of a rope's chunks *)
-fun rope_len {k:nat} .<k>. (cs: !$B.rope_list(k)): [t:nat] int t =
+fun rope_len {k:nat} .<k>. (cs: !$B.rope_sized_list(k)): [t:nat] int t =
   case+ cs of
-  | $B.rope_nil() => 0
-  | $B.rope_cons(_, n, tl) => n + rope_len(tl)
+  | $B.rope_sized_nil() => 0
+  | $B.rope_sized_cons(_, n, tl) => n + rope_len(tl)
 
 (* The chunks into a from off on; false when one does not fit *)
 fun rope_into {l:agz}{o:addr}{m:nat}{k:nat}{f:nat} .<k>.
-  (cs: !$B.rope_list(k), a: !$A.arrx(byte, l, m, o), m: int m, off: int f): bool =
+  (cs: !$B.rope_sized_list(k), a: !$A.arrx(byte, l, m, o), m: int m, off: int f): bool =
   case+ cs of
-  | $B.rope_nil() => true
-  | $B.rope_cons(c, n, tl) => let
-      fun copy {lc:agz}{n:nat | n <= $B.BUILDER_CAP}{i:nat | i <= n} .<n - i>.
-        (c: !$A.arr(byte, lc, $B.BUILDER_CAP), a: !$A.arrx(byte, l, m, o), m: int m,
+  | $B.rope_sized_nil() => true
+  | $B.rope_sized_cons(c, n, tl) => let
+      fun copy {lc:agz}{cap:pos}{n:nat | n <= cap}{i:nat | i <= n} .<n - i>.
+        (c: !$A.arr(byte, lc, cap), a: !$A.arrx(byte, l, m, o), m: int m,
          off: int f, i: int i, n: int n): bool =
         if i >= n then true
         else let
@@ -264,20 +264,20 @@ fun rope_into {l:agz}{o:addr}{m:nat}{k:nat}{f:nat} .<k>.
       if copy(c, a, m, off, 0, n) then rope_into(tl, a, m, off + n) else false
     end
 
-(* v through serialize_rope and parse_text: whether it comes back the
+(* v through serialize_sized_rope and parse_text: whether it comes back the
    same string (or an array, for an array), and the serialized length *)
 fn rope_roundtrip {sz:nat} (v: $J.json(sz)): @(bool, int) = let
-  val r = $B.rope_create()
-  val () = $J.serialize_rope(v, r)
-  val cs = $B.rope_chunks(r)
+  val r = $B.sized_rope_create()
+  val () = $J.serialize_sized_rope(v, r)
+  val cs = $B.sized_rope_chunks(r)
   val total = rope_len(cs)
 in
   if total <= 0 then let
-    val () = $B.rope_list_free(cs)
+    val () = $B.rope_sized_list_free(cs)
     val () = $J.json_free(v)
   in @(false, total) end
   else if total > 268435456 then let
-    val () = $B.rope_list_free(cs)
+    val () = $B.rope_sized_list_free(cs)
     val () = $J.json_free(v)
   in @(false, total) end
   else let
@@ -287,7 +287,7 @@ in
     | ~$A.arena_some(ar) => let
         val a = $A.arena_alloc<byte>(ar, m)
         val copied = rope_into(cs, a, m, 0)
-        val () = $B.rope_list_free(cs)
+        val () = $B.rope_sized_list_free(cs)
         val @(f, bv) = $A.freeze<byte>(a)
         val back = $J.parse_text(bv, m)
         val () = $A.drop<byte>(f, bv)
@@ -302,7 +302,7 @@ in
         val () = $J.json_free(v)
       in @(copied && ok, total) end
     | ~$A.arena_none() => let
-        val () = $B.rope_list_free(cs)
+        val () = $B.rope_sized_list_free(cs)
         val () = $J.json_free(v)
       in @(false, 0) end
   end
