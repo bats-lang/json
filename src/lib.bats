@@ -496,6 +496,7 @@ implement serialize_entries(ents, b, first) = _ser_entries(ents, b, first)
    over a sink whose index changes.
    ============================================================ *)
 
+(* Deprecated, kept for one published version (area: overlap; removal: json#53): serialize_sized_rope is its form on builder's sized rope *)
 #pub fun serialize_rope {sz:nat} (v: !json(sz), r: !$B.rope): void
 
 (* Writes \u00XX for c < 256 *)
@@ -572,6 +573,91 @@ and _rser_entries {sz:nat} .<sz, 1>. (ents: !json_entries(sz), r: !$B.rope, firs
     in _rser_entries(rest, r, false) end
 
 implement serialize_rope(v, r) = _rser(v, r)
+
+(* ============================================================
+   Serialize onto a sized rope (#52): the same text as serialize_rope,
+   written to builder's sized_rope, whose chunks are the builder's own
+   arrays and not BUILDER_CAP bytes each. serialize_rope above is kept
+   one published version beside it (area: overlap). The walk repeats
+   serialize_rope's for the other sink, for the reason given there.
+   ============================================================ *)
+
+#pub fun serialize_sized_rope {sz:nat} (v: !json(sz), r: !$B.sized_rope): void
+
+(* Writes \u00XX for c < 256 *)
+fn srope_u00 (r: !$B.sized_rope, c: int): void = let
+  val () = $B.sized_rope_bput(r, "\\u00")
+  val () = $B.sized_rope_put(r, hex_digit(c / 16))
+in $B.sized_rope_put(r, hex_digit(c - (c / 16) * 16)) end
+
+(* Writes a[i, k) as it is *)
+fun srope_raw {l:agz}{c:pos}{k:nat | k <= c}{i:nat | i <= k} .<k - i>.
+  (r: !$B.sized_rope, a: !$A.arr(byte, l, c), i: int i, k: int k): void =
+  if i >= k then ()
+  else let
+    val () = $B.sized_rope_put(r, $AR.low_byte(byte2int0($A.get<byte>(a, i))))
+  in srope_raw(r, a, i + 1, k) end
+
+(* Writes a[0, dlen) escaped for a JSON string, as esc_at says *)
+fn srope_escaped {l:agz}{c:pos}{dlen:nat | dlen <= c}
+  (r: !$B.sized_rope, arr: !$A.arr(byte, l, c), len: int dlen): void = let
+  fun loop {pos:nat | pos <= dlen} .<dlen - pos>.
+    (r: !$B.sized_rope, arr: !$A.arr(byte, l, c), pos: int pos, len: int dlen): void =
+    if pos >= len then ()
+    else let
+      val @(kind, x, k) = esc_at(arr, pos, len)
+      val () = (if kind = 0 then srope_raw(r, arr, pos, pos + k)
+                else if kind = 1 then let
+                  val () = $B.sized_rope_put(r, 92)
+                in $B.sized_rope_put(r, $AR.low_byte(x)) end
+                else if kind = 2 then srope_u00(r, x)
+                else $B.sized_rope_bput(r, "\\ufffd"))
+    in loop(r, arr, pos + k, len) end
+in loop(r, arr, 0, len) end
+
+fn srope_number {l:agz}{c:pos}{len:pos | len <= c}
+  (r: !$B.sized_rope, a: !$A.arr(byte, l, c), len: int len): void =
+  if lexeme_ok(a, len) then srope_raw(r, a, 0, len) else $B.sized_rope_bput(r, "null")
+
+fun _srser {sz:nat} .<sz, 0>. (v: !json(sz), r: !$B.sized_rope): void =
+  case+ v of
+  | json_null() => $B.sized_rope_bput(r, "null")
+  | json_bool(t) => (if t then $B.sized_rope_bput(r, "true") else $B.sized_rope_bput(r, "false"))
+  | json_num(arr, len, _) => srope_number(r, arr, len)
+  | json_str(arr, len) => let
+      val () = $B.sized_rope_put(r, 34)
+      val () = srope_escaped(r, arr, len)
+    in $B.sized_rope_put(r, 34) end
+  | json_arr(lst) => let
+      val () = $B.sized_rope_put(r, 91)
+      val () = _srser_list(lst, r, true)
+    in $B.sized_rope_put(r, 93) end
+  | json_obj(ents) => let
+      val () = $B.sized_rope_put(r, 123)
+      val () = _srser_entries(ents, r, true)
+    in $B.sized_rope_put(r, 125) end
+
+and _srser_list {sz:nat} .<sz, 1>. (lst: !json_list(sz), r: !$B.sized_rope, first: bool): void =
+  case+ lst of
+  | json_list_nil() => ()
+  | json_list_cons(v, rest) => let
+      val () = (if ~first then $B.sized_rope_put(r, 44) else ())
+      val () = _srser(v, r)
+    in _srser_list(rest, r, false) end
+
+and _srser_entries {sz:nat} .<sz, 1>. (ents: !json_entries(sz), r: !$B.sized_rope, first: bool): void =
+  case+ ents of
+  | json_entries_nil() => ()
+  | json_entries_cons(k, klen, v, rest) => let
+      val () = (if ~first then $B.sized_rope_put(r, 44) else ())
+      val () = $B.sized_rope_put(r, 34)
+      val () = srope_escaped(r, k, klen)
+      val () = $B.sized_rope_put(r, 34)
+      val () = $B.sized_rope_put(r, 58)
+      val () = _srser(v, r)
+    in _srser_entries(rest, r, false) end
+
+implement serialize_sized_rope(v, r) = _srser(v, r)
 
 (* ============================================================
    Deserialize: byte buffer → JSON value

@@ -1,0 +1,9 @@
+[package]
+name = "oldrope"
+kind = "bin"
+
+[dependencies]
+"array" = ""
+"builder" = ""
+"result" = ""
+"json" = ""
