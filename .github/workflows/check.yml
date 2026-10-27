@@ -3,12 +3,16 @@ name: check
 on:
   push:
     branches: [main]
+  # A draft pull request runs no job (package-check.yml, keyword: draft-ci), so
+  # marking it ready must start the check: ready_for_review is added to the
+  # default types
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   # The daily relock dispatches it on its relock/<date> branch: a pull
   # request opened with GITHUB_TOKEN starts no workflow by itself
   workflow_dispatch:
 
 jobs:
   check:
-    uses: bats-lang/repository-prototype/.github/workflows/package-check.yml@27c4400526b73660e3c23d960748599658bce275 # repository-prototype main 27c4400
+    uses: bats-lang/repository-prototype/.github/workflows/package-check.yml@030748717f2f0ec00d60de068208778ea1d9cdef # repository-prototype main 0307487

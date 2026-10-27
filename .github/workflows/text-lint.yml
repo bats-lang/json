@@ -1,0 +1,20 @@
+# The form of every pull request body, one lint for every repository of the organisation
+# (bats-lang/repository-prototype#487): the first line is Fixes #N, one ticket, a Head line
+# that is the head, one generated-by footer. The result is the commit status text-lint on the
+# head, set again on every edit of the body. The work is the shared text-lint-check.yml,
+# called by commit; tools-ref is the same commit (a reusable workflow cannot read its own).
+name: text-lint
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  text-lint:
+    uses: bats-lang/repository-prototype/.github/workflows/text-lint-check.yml@030748717f2f0ec00d60de068208778ea1d9cdef # repository-prototype main 0307487
+    with:
+      tools-ref: 030748717f2f0ec00d60de068208778ea1d9cdef
