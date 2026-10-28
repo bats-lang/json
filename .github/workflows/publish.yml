@@ -8,5 +8,5 @@ on:
     paths: ['src/**', 'bats.toml']
 jobs:
   publish:
-    uses: bats-lang/repository-prototype/.github/workflows/publish.yml@030748717f2f0ec00d60de068208778ea1d9cdef # repository-prototype main 0307487
+    uses: bats-lang/repository-prototype/.github/workflows/publish.yml@f7c08d40621f70f8190f8e6b71bb5d7ef4e88708 # repository-prototype main f7c08d4
     secrets: inherit
